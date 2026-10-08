@@ -1,0 +1,47 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Model artifacts and data (large / regenerable / not meant for git)
+/model_artifacts/
+/data/*.csv
+
+# Local database and user data
+*.db
+*.sqlite
+*.sqlite3
+users.db
+
+# PyInstaller build output
+*.spec
+/build/
+/dist/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
