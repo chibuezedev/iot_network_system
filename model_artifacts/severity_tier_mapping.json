@@ -1,0 +1,12 @@
+{
+  "normal": 0,
+  "scanning": 1,
+  "password": 2,
+  "backdoor": 2,
+  "mitm": 2,
+  "injection": 2,
+  "xss": 2,
+  "dos": 3,
+  "ddos": 3,
+  "ransomware": 4
+}

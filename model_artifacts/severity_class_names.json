@@ -1,0 +1,7 @@
+{
+  "0": "Normal",
+  "1": "Reconnaissance",
+  "2": "Access/Compromise",
+  "3": "High (DoS/DDoS)",
+  "4": "Critical (Ransomware)"
+}
