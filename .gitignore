@@ -14,7 +14,7 @@ dist/
 
 # Model artifacts and data (large / regenerable / not meant for git)
 # /model_artifacts/
-/data/*.csv
+# /data/*.csv
 
 # Local database and user data
 *.db
