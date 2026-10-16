@@ -46,7 +46,10 @@ class DashboardView(tk.Frame):
         ).pack(anchor="w")
         tk.Label(
             pad,
-            text="Session overview -- resets when a new monitoring session starts",
+            text="Legacy XGBoost demo (non-chronological sample) -- session overview of the baseline "
+            "panel; resets when a new monitoring session starts. RF–LSTM results are under Hybrid Replay.",
+            justify="left",
+            wraplength=1000,
             bg=theme.BG_PRIMARY,
             fg=theme.TEXT_MUTED,
             font=theme.FONT_LABEL,

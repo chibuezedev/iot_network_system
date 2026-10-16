@@ -36,8 +36,13 @@ class LiveMonitorView(tk.Frame):
 
         header = tk.Frame(pad, bg=theme.BG_PRIMARY)
         header.pack(fill="x")
-        tk.Label(header, text="Live Monitor", bg=theme.BG_PRIMARY, fg=theme.TEXT_PRIMARY,
-                 font=(theme.FONT_HEADER[0], 18, "bold")).pack(side="left")
+        tk.Label(header, text="Baseline: XGBoost (CICIoT2023, per-flow, no forecasting)", bg=theme.BG_PRIMARY,
+                 fg=theme.TEXT_PRIMARY, font=(theme.FONT_HEADER[0], 18, "bold")).pack(side="left")
+        tk.Label(pad, text="Legacy XGBoost demo (non-chronological sample) — rows are drawn at random from "
+                           "data/simulations_feed.csv; Sim Time, Source IP, protocol and device names are generated "
+                           "for display, not recorded. For recorded-time analysis use Hybrid Replay.",
+                 bg=theme.BG_PRIMARY, fg=theme.ACCENT_AMBER, font=theme.FONT_LABEL, justify="left",
+                 wraplength=1000).pack(anchor="w", pady=(4, 0))
 
         controls = tk.Frame(pad, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1)
         controls.pack(fill="x", pady=(12, 12))

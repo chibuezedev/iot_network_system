@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 from app.live_monitor.engine import SimulationEngine
 from models.inference import Spotter, RiskAnalyst
+from services.hybrid_service import AlertTracker, HybridReplayEngine, HybridService
 
 
 @dataclass
@@ -33,7 +34,8 @@ class AppContext:
     """Everything a screen needs, handed down from main.py. Keeps screens
     decoupled from each other -- they only ever talk to this object."""
 
-    def __init__(self, user_row, spotter: Spotter, risk_analyst: RiskAnalyst, engine: SimulationEngine):
+    def __init__(self, user_row, spotter: Spotter, risk_analyst: RiskAnalyst, engine: SimulationEngine,
+                 hybrid: Optional[HybridService] = None, hybrid_error: Optional[str] = None):
         self.user_row = user_row
         self.username: str = user_row["username"]
         self.role: str = user_row["role"]
@@ -48,6 +50,15 @@ class AppContext:
         self.recent_events: list = []  # in-memory ring buffer for the Live Monitor table
         self.result_listeners: list[Callable] = []  # views wanting every new SimResult
         self.max_recent_events = 500
+
+        # RF-LSTM hybrid (primary model). Independent of the legacy engine/counters above.
+        self.hybrid = hybrid
+        self.hybrid_error = hybrid_error          # set when the service itself failed to load
+        self.hybrid_engine: Optional[HybridReplayEngine] = HybridReplayEngine(hybrid) if hybrid else None
+        self.hybrid_tracker = AlertTracker()
+        self.hybrid_run_id: Optional[int] = None
+        self.hybrid_last_step = None              # latest ReplayStep
+        self.hybrid_listeners: list[Callable] = []  # called with (step, new_alerts)
 
     def is_admin(self) -> bool:
         return self.role == "administrator"

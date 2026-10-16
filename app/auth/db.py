@@ -76,6 +76,28 @@ def init_db() -> None:
             )
             """
         )
+        # RF-LSTM hybrid alerts. window_start is the RECORDED capture time of
+        # the window (epoch s), never a wall-clock time. run_id groups the
+        # alerts of one replay run.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hybrid_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                host TEXT NOT NULL,
+                window_start REAL NOT NULL,
+                window_start_utc TEXT NOT NULL,
+                level TEXT NOT NULL,
+                reason TEXT,
+                kind TEXT,
+                det_tier INTEGER,
+                fut_tier INTEGER,
+                p_attack_next REAL,
+                p_severe_next REAL,
+                horizon_minutes REAL
+            )
+            """
+        )
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
         if row["c"] == 0:
             pw_hash = bcrypt.hashpw(
@@ -274,3 +296,42 @@ def fetch_sessions(limit: int = 100):
         return conn.execute(
             "SELECT * FROM session_log ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+
+# ---------------------------------------------------------------- RF-LSTM hybrid alerts
+HYBRID_ALERT_FIELDS = ("host", "window_start", "window_start_utc", "level", "reason", "kind",
+                       "det_tier", "fut_tier", "p_attack_next", "p_severe_next", "horizon_minutes")
+
+
+def next_hybrid_run_id() -> int:
+    with get_conn() as conn:
+        row = conn.execute("SELECT COALESCE(MAX(run_id), 0) AS m FROM hybrid_alerts").fetchone()
+    return int(row["m"]) + 1
+
+
+def log_hybrid_alert(run_id: int, alert: dict) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            f"INSERT INTO hybrid_alerts (run_id, {', '.join(HYBRID_ALERT_FIELDS)}) "
+            f"VALUES (?, {', '.join('?' for _ in HYBRID_ALERT_FIELDS)})",
+            (run_id, *[alert[f] for f in HYBRID_ALERT_FIELDS]),
+        )
+
+
+def fetch_hybrid_alerts(run_id: Optional[int] = None, limit: int = 2000):
+    """Newest recorded window first."""
+    query = "SELECT * FROM hybrid_alerts"
+    params: list = []
+    if run_id is not None:
+        query += " WHERE run_id = ?"
+        params.append(run_id)
+    query += " ORDER BY window_start DESC, id DESC LIMIT ?"
+    params.append(limit)
+    with get_conn() as conn:
+        return conn.execute(query, params).fetchall()
+
+
+def latest_hybrid_run_id() -> Optional[int]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT MAX(run_id) AS m FROM hybrid_alerts").fetchone()
+    return row["m"]
