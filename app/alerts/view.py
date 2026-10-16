@@ -8,7 +8,10 @@ from tkinter import ttk, filedialog
 from app.auth import db
 from app.common import theme
 from app.common.context import AppContext
-from app.common.widgets import show_toast
+from app.common.widgets import AlertBadge, HybridAlertRow, ScrollFrame, show_toast
+from services.hybrid_service import TIER_NAMES
+
+HYBRID_ALERT_LIMIT = 500
 
 
 class AlertsView(tk.Frame):
@@ -20,6 +23,93 @@ class AlertsView(tk.Frame):
 
     def on_show(self) -> None:
         self._reload()
+        self._reload_hybrid()
+
+    # ---------------------------------------------------------------- hybrid
+    def _build_hybrid(self, tab) -> None:
+        tk.Label(tab, text="Alerts from the RF–LSTM engine (alert_level / alert_reason). One alert per host per "
+                           "level until that host's level changes. Times are recorded window starts (UTC).",
+                 bg=theme.BG_PRIMARY, fg=theme.TEXT_MUTED, font=theme.FONT_LABEL, justify="left",
+                 wraplength=1000).pack(anchor="w")
+        legend = tk.Frame(tab, bg=theme.BG_PRIMARY)
+        legend.pack(anchor="w", pady=(6, 8))
+        for i, (kind, text) in enumerate((
+                ("Detected", "filled = Detected: the current window is classified as an attack tier"),
+                ("Predicted", "outlined = Predicted: forecast for the horizon ahead, not yet observed"))):
+            AlertBadge(legend, "HIGH", kind, bg=theme.BG_PRIMARY).grid(row=i, column=0, sticky="w", pady=2)
+            tk.Label(legend, text=text, bg=theme.BG_PRIMARY, fg=theme.TEXT_MUTED,
+                     font=(theme.FONT_LABEL[0], 9)).grid(row=i, column=1, sticky="w", padx=(8, 0))
+
+        filters = tk.Frame(tab, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1)
+        filters.pack(fill="x", pady=(0, 8))
+        f = tk.Frame(filters, bg=theme.BG_CARD, padx=12, pady=8)
+        f.pack(fill="x")
+        tk.Label(f, text="Level", bg=theme.BG_CARD, fg=theme.TEXT_MUTED, font=theme.FONT_LABEL).pack(side="left")
+        self.h_level_var = tk.StringVar(value="All")
+        ttk.Combobox(f, textvariable=self.h_level_var, values=["All"] + theme.ALERT_LEVEL_ORDER[:-1], width=11,
+                     state="readonly").pack(side="left", padx=(6, 18))
+        tk.Label(f, text="Type", bg=theme.BG_CARD, fg=theme.TEXT_MUTED, font=theme.FONT_LABEL).pack(side="left")
+        self.h_kind_var = tk.StringVar(value="All")
+        ttk.Combobox(f, textvariable=self.h_kind_var, values=["All", "Detected", "Predicted"], width=11,
+                     state="readonly").pack(side="left", padx=(6, 18))
+        self.h_all_runs = tk.BooleanVar(value=False)
+        tk.Checkbutton(f, text="All replay runs", variable=self.h_all_runs, bg=theme.BG_CARD, fg=theme.TEXT_PRIMARY,
+                       selectcolor=theme.BG_SECONDARY, activebackground=theme.BG_CARD,
+                       font=theme.FONT_LABEL).pack(side="left")
+        tk.Button(f, text="Apply Filters", command=self._reload_hybrid, bg=theme.BG_SECONDARY, fg=theme.ACCENT_CYAN,
+                  relief="flat", font=(theme.FONT_LABEL[0], 9, "bold"), cursor="hand2", padx=10).pack(side="left",
+                                                                                                    padx=12)
+        tk.Button(f, text="Export CSV", command=self._export_hybrid_csv, bg=theme.BG_SECONDARY,
+                  fg=theme.ACCENT_GREEN, relief="flat", font=(theme.FONT_LABEL[0], 9, "bold"), cursor="hand2",
+                  padx=10).pack(side="right")
+        self.h_count = tk.Label(filters, text="", bg=theme.BG_CARD, fg=theme.TEXT_MUTED, font=theme.FONT_MONO_SMALL)
+        self.h_count.pack(anchor="w", padx=12, pady=(0, 6))
+
+        self.h_scroll = ScrollFrame(tab, bg=theme.BG_CARD)
+        self.h_scroll.pack(fill="both", expand=True)
+        self._hybrid_rows: list = []
+
+    def _on_hybrid_step(self, step, new_alerts) -> None:
+        if new_alerts and self.winfo_exists() and self.winfo_viewable():
+            self._reload_hybrid()
+
+    def _reload_hybrid(self) -> None:
+        run_id = None if self.h_all_runs.get() else (self.ctx.hybrid_run_id or db.latest_hybrid_run_id())
+        rows = [dict(r) for r in db.fetch_hybrid_alerts(run_id=run_id, limit=HYBRID_ALERT_LIMIT)]
+        level, kind = self.h_level_var.get(), self.h_kind_var.get()
+        rows = [r for r in rows if (level == "All" or r["level"] == level) and (kind == "All" or r["kind"] == kind)]
+        self._hybrid_rows = rows
+        n_pred = sum(1 for r in rows if r["kind"] == "Predicted")
+        self.h_count.config(text=f"{len(rows)} shown · {len(rows) - n_pred} detected · {n_pred} predicted"
+                                 + ("" if run_id is None else f" · run #{run_id}"))
+        body = self.h_scroll.body
+        for w in body.winfo_children():
+            w.destroy()
+        if not rows:
+            msg = ("No RF–LSTM alerts match. Start the Hybrid Replay to generate alerts."
+                   if level == "All" and kind == "All" else f"No {kind if kind != 'All' else ''} "
+                   f"{level if level != 'All' else ''} alerts in the selected run(s).".replace("  ", " "))
+            tk.Label(body, text=msg, bg=theme.BG_CARD, fg=theme.TEXT_MUTED, font=theme.FONT_LABEL).pack(
+                anchor="w", padx=12, pady=12)
+            return
+        for r in rows:
+            HybridAlertRow(body, r, TIER_NAMES).pack(fill="x", padx=12)
+            tk.Frame(body, bg=theme.BORDER, height=1).pack(fill="x", padx=12)
+
+    def _export_hybrid_csv(self) -> None:
+        if not self._hybrid_rows:
+            show_toast(self.winfo_toplevel(), "Nothing to export", "No hybrid alerts match the filters.", "warning")
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        cols = ["run_id", *db.HYBRID_ALERT_FIELDS]
+        with open(path, "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(cols)
+            for r in self._hybrid_rows:
+                writer.writerow([r[c] for c in cols])
+        show_toast(self.winfo_toplevel(), "Export complete", f"Hybrid alerts exported to {path}", "success")
 
     def _build(self) -> None:
         pad = tk.Frame(self, bg=theme.BG_PRIMARY, padx=24, pady=18)
@@ -29,6 +119,21 @@ class AlertsView(tk.Frame):
                  font=(theme.FONT_HEADER[0], 18, "bold")).pack(anchor="w")
         tk.Label(pad, text="Every event that crossed the alert threshold, logged to disk across sessions",
                  bg=theme.BG_PRIMARY, fg=theme.TEXT_MUTED, font=theme.FONT_LABEL).pack(anchor="w", pady=(0, 12))
+
+        notebook = ttk.Notebook(pad)
+        notebook.pack(fill="both", expand=True)
+        hybrid_tab = tk.Frame(notebook, bg=theme.BG_PRIMARY, padx=4, pady=10)
+        legacy_tab = tk.Frame(notebook, bg=theme.BG_PRIMARY, padx=4, pady=10)
+        notebook.add(hybrid_tab, text="  RF–LSTM hybrid (recorded ToN_IoT replay)  ")
+        notebook.add(legacy_tab, text="  Legacy XGBoost demo (non-chronological sample)  ")
+        self._build_hybrid(hybrid_tab)
+        self.ctx.hybrid_listeners.append(self._on_hybrid_step)
+
+        # ---- legacy XGBoost alerts (unchanged behaviour) ----
+        pad = legacy_tab
+        tk.Label(pad, text="Legacy XGBoost demo (non-chronological sample): times, source IPs and device names in "
+                           "this table are generated by the demo feed, not recorded.",
+                 bg=theme.BG_PRIMARY, fg=theme.ACCENT_AMBER, font=theme.FONT_LABEL).pack(anchor="w", pady=(0, 8))
 
         filters = tk.Frame(pad, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1)
         filters.pack(fill="x", pady=(0, 10))

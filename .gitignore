@@ -16,6 +16,9 @@ dist/
 # /model_artifacts/
 # /data/*.csv
 
+# RF-LSTM hybrid artifacts: unzipped from the Kaggle notebook output (see Readme.md)
+/artifacts_rf_lstm/
+
 # Local database and user data
 *.db
 *.sqlite

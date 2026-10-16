@@ -30,6 +30,15 @@ SEVERITY_LABELS = {
     3: "High (DoS/DDoS)", 4: "Critical (Ransomware)",
 }
 
+# Alert levels produced by the RF-LSTM engine's alert_level()
+ALERT_LEVEL_COLORS = {
+    "NORMAL": ACCENT_GREEN,
+    "WARNING": "#eab308",
+    "HIGH": ACCENT_AMBER,
+    "CRITICAL": ACCENT_RED,
+}
+ALERT_LEVEL_ORDER = ["CRITICAL", "HIGH", "WARNING", "NORMAL"]
+
 FONT_HEADER = ("Segoe UI Semibold", 14)
 FONT_LABEL = ("Segoe UI", 10)
 FONT_MONO = ("Consolas", 10)

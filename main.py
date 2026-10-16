@@ -18,6 +18,7 @@ from app.common.widgets import show_toast
 from app.live_monitor.engine import SimulationEngine
 from app.shell import Shell
 from models.inference import load_models
+from services.hybrid_service import HybridService
 
 
 class SentinelApp:
@@ -34,6 +35,11 @@ class SentinelApp:
         self._configure_styles()
 
         self.spotter, self.risk_analyst = load_models()
+        self.hybrid, self.hybrid_error = None, None
+        try:
+            self.hybrid = HybridService()
+        except Exception as exc:  # missing/broken artifacts must not take the legacy app down
+            self.hybrid_error = f"RF-LSTM hybrid failed to load: {type(exc).__name__}: {exc}"
 
         self._current_frame: tk.Widget | None = None
         self._show_login()
@@ -106,7 +112,8 @@ class SentinelApp:
             spotter=self.spotter,
             risk_analyst=self.risk_analyst,
         )
-        ctx = AppContext(user_row=user_row, spotter=self.spotter, risk_analyst=self.risk_analyst, engine=engine)
+        ctx = AppContext(user_row=user_row, spotter=self.spotter, risk_analyst=self.risk_analyst, engine=engine,
+                         hybrid=getattr(self, "hybrid", None), hybrid_error=getattr(self, "hybrid_error", None))
         ctx.on_logout = self._logout
         self._current_frame = Shell(self.root, ctx, on_logout=self._logout)
         self._active_ctx = ctx
@@ -115,6 +122,8 @@ class SentinelApp:
         ctx = getattr(self, "_active_ctx", None)
         if ctx is not None:
             ctx.engine.stop()
+            if ctx.hybrid_engine is not None:
+                ctx.hybrid_engine.stop()
         self._show_login()
 
 

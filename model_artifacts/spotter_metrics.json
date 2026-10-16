@@ -1,0 +1,13 @@
+{
+  "source": "Held-out test-set metrics reported by the earlier CICIoT2023 XGBoost notebook (Spotter, legacy baseline). Copied unchanged from models/inference.py; not recomputed by this app.",
+  "metrics": {
+    "Accuracy": 0.9946,
+    "Balanced Accuracy": 0.8661,
+    "Precision (macro)": 0.9082,
+    "Recall (macro)": 0.8661,
+    "F1 (macro)": 0.8799,
+    "F1 (weighted)": 0.9947,
+    "Matthews Correlation Coefficient": 0.9941,
+    "Cohen's Kappa": 0.9941
+  }
+}
