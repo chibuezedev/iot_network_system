@@ -31,6 +31,7 @@ actually learned.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from typing import Optional
@@ -65,22 +66,21 @@ class Spotter:
         with open(f"{artifacts}/detection_class_names.json") as f:
             self.class_names: list[str] = json.load(f)
 
-        # Reference metrics from the real trained model (Section 1 of the
-        # build spec). These describe the ACTUAL research model's held-out
-        # test performance and are shown as-is in Model Info regardless of
-        # which artifact file happens to be loaded at runtime (placeholder
-        # or real) -- clearly labeled as reference metrics, never presented
-        # as a live evaluation of the current session.
-        self.reference_metrics = {
-            "Accuracy": 0.9946,
-            "Balanced Accuracy": 0.8661,
-            "Precision (macro)": 0.9082,
-            "Recall (macro)": 0.8661,
-            "F1 (macro)": 0.8799,
-            "F1 (weighted)": 0.9947,
-            "Matthews Correlation Coefficient": 0.9941,
-            "Cohen's Kappa": 0.9941,
-        }
+        # Reference metrics from the real trained model, read from
+        # model_artifacts/spotter_metrics.json (values reported by the earlier
+        # CICIoT2023 XGBoost notebook). They describe the ACTUAL research
+        # model's held-out test performance and are shown as-is in Model Info
+        # regardless of which artifact file happens to be loaded at runtime --
+        # clearly labeled as reference metrics, never presented as a live
+        # evaluation of the current session. Missing file -> None.
+        self.reference_metrics: Optional[dict] = None
+        self.reference_metrics_source: Optional[str] = None
+        metrics_path = f"{artifacts}/spotter_metrics.json"
+        if os.path.exists(metrics_path):
+            with open(metrics_path) as f:
+                ref = json.load(f)
+            self.reference_metrics = ref.get("metrics")
+            self.reference_metrics_source = ref.get("source")
 
     def predict_row(self, row: pd.Series) -> PredictionResult:
         x = row[self.feature_columns].to_frame().T.astype("float32")

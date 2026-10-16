@@ -11,8 +11,11 @@ from app.common.widgets import LiveIndicator, RoleBadge, show_toast
 
 NAV_ITEMS = [
     ("dashboard", "\u25a6  Dashboard"),
-    ("live_monitor", "\u25b6  Live Monitor"),
+    ("hybrid_replay", "\u25c9  Hybrid Replay"),
+    ("risk_timeline", "\u2197  Risk Timeline"),
     ("alerts", "\u26a0  Alerts"),
+    ("model_comparison", "\u2261  Model Comparison"),
+    ("live_monitor", "\u25b6  Baseline: XGBoost"),
     ("analytics", "\u25a4  Analytics & Reports"),
     ("model_info", "\u2699  Model Info"),
     ("user_management", "\U0001f465  User Management"),
@@ -148,7 +151,47 @@ class Shell(ttk.Frame):
                 break
             drained += 1
             self._handle_result(result)
+        self._poll_hybrid_queue()
         self.after(80, self._poll_engine_queue)
+
+    # ------------------------------------------------------------------
+    # RF-LSTM hybrid replay: same drain pattern, separate state from the
+    # legacy counters. Every time used here is step.window_start (recorded).
+    def _poll_hybrid_queue(self) -> None:
+        engine = self.ctx.hybrid_engine
+        if engine is None:
+            return
+        for _ in range(20):
+            try:
+                step = engine.result_queue.get_nowait()
+            except Exception:
+                break
+            self._handle_hybrid_step(step)
+
+    def _handle_hybrid_step(self, step) -> None:
+        ctx = self.ctx
+        ctx.hybrid_last_step = step
+        new_alerts = ctx.hybrid_tracker.update(step)
+        for alert in new_alerts:
+            if ctx.hybrid_run_id is not None:
+                db.log_hybrid_alert(ctx.hybrid_run_id, alert.__dict__)
+        if new_alerts:
+            worst = min(new_alerts, key=lambda a: theme.ALERT_LEVEL_ORDER.index(a.level))
+            now = time.time()  # toast rate-limit only; never an event time
+            if worst.level in ("CRITICAL", "HIGH") and (now - self._last_toast_time) >= self._toast_cooldown_seconds:
+                self._last_toast_time = now
+                more = f" (+{len(new_alerts) - 1} more)" if len(new_alerts) > 1 else ""
+                show_toast(
+                    self.winfo_toplevel(),
+                    f"{worst.level} · {worst.kind}",
+                    f"{worst.host} at {worst.window_start_utc} (recorded){more}\n{worst.reason}",
+                    "critical" if worst.level == "CRITICAL" else "warning",
+                )
+        for listener in list(ctx.hybrid_listeners):
+            try:
+                listener(step, new_alerts)
+            except Exception:
+                pass
 
     def _handle_result(self, result) -> None:
         ctx = self.ctx
@@ -213,11 +256,11 @@ class Shell(ttk.Frame):
             return
         btn.config(bg=theme.BG_CARD if entering else theme.BG_SECONDARY)
 
-    def set_live_status(self, live: bool) -> None:
+    def set_live_status(self, live: bool, text: str = "Live") -> None:
         if live:
             self.status_indicator.set_color(theme.ACCENT_GREEN)
             self.status_indicator.start()
-            self.status_label.config(text="Live", fg=theme.ACCENT_GREEN)
+            self.status_label.config(text=text, fg=theme.ACCENT_GREEN)
         else:
             self.status_indicator.stop()
             self.status_indicator.set_color(theme.TEXT_MUTED)
@@ -257,6 +300,18 @@ class Shell(ttk.Frame):
             from app.live_monitor.view import LiveMonitorView
 
             return LiveMonitorView(self.content, self.ctx, shell=self)
+        if key == "hybrid_replay":
+            from app.hybrid_replay.view import HybridReplayView
+
+            return HybridReplayView(self.content, self.ctx, shell=self)
+        if key == "risk_timeline":
+            from app.risk_timeline.view import RiskTimelineView
+
+            return RiskTimelineView(self.content, self.ctx)
+        if key == "model_comparison":
+            from app.model_comparison.view import ModelComparisonView
+
+            return ModelComparisonView(self.content, self.ctx)
         if key == "alerts":
             from app.alerts.view import AlertsView
 

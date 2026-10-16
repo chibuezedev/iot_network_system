@@ -64,7 +64,7 @@ class AnalyticsView(tk.Frame):
         ).pack(side="left")
         tk.Label(
             header,
-            text="Reflects every session ever logged to disk, updates automatically",
+            text="Legacy XGBoost demo (non-chronological sample) -- every legacy session logged to disk",
             bg=theme.BG_PRIMARY,
             fg=theme.TEXT_MUTED,
             font=theme.FONT_LABEL,
@@ -415,8 +415,8 @@ th {{ background:#121821; }}
 <table><tr><th>Attack Type</th><th>Count</th></tr>{attack_rows}</table>
 <h2>Severity Tier Breakdown (This Session)</h2>
 <table><tr><th>Tier</th><th>Count</th></tr>{severity_rows}</table>
-<p style="color:#8b98a9;font-size:12px">Note: figures reflect the current in-app simulation session using the
-loaded model_artifacts, not a live network capture. See the Analytics screen's All-Time charts for
+<p style="color:#8b98a9;font-size:12px">Legacy XGBoost demo (non-chronological sample). Note: figures reflect the
+current in-app simulation session using the loaded model_artifacts, not a live network capture. See the Analytics screen's All-Time charts for
 cumulative history across every session on this machine.</p>
 </body></html>"""
         with open(path, "w") as f:

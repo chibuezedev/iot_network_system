@@ -171,3 +171,109 @@ class RoleBadge(tk.Label):
             parent, text=role.upper(), bg=color, fg="#0b0f14",
             font=(theme.FONT_LABEL[0], 8, "bold"), padx=8, pady=2,
         )
+
+
+class ScrollFrame(tk.Frame):
+    """Vertically scrollable container; put children in `.body`."""
+
+    def __init__(self, parent, bg: str = theme.BG_PRIMARY):
+        super().__init__(parent, bg=bg)
+        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0)
+        self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.body = tk.Frame(self.canvas, bg=bg)
+        self._win = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scroll.pack(side="right", fill="y")
+        self.body.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self.bind_all("<MouseWheel>", self._on_wheel, add="+")
+
+    def _on_wheel(self, event) -> None:
+        if not self.winfo_exists() or not self.winfo_viewable():
+            return
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        while widget is not None and widget is not self:
+            widget = widget.master
+        if widget is self:
+            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+
+def dataframe_table(parent, df, height: int | None = None, style: str = "Data.Treeview",
+                    min_width: int = 70) -> ttk.Treeview:
+    """Read-only Treeview showing a DataFrame as-is (floats to 4 dp, NaN as an em dash)."""
+    import math
+    import tkinter.font as tkfont
+
+    body_font = tkfont.Font(font=theme.FONT_MONO_SMALL)
+    head_font = tkfont.Font(font=(theme.FONT_LABEL[0], 8, "bold"))
+    st = ttk.Style()
+    st.configure(style, background=theme.BG_CARD, fieldbackground=theme.BG_CARD,
+                 foreground=theme.TEXT_PRIMARY, rowheight=22, font=theme.FONT_MONO_SMALL)
+    st.configure(f"{style}.Heading", background=theme.BG_SECONDARY, foreground=theme.TEXT_MUTED,
+                 font=(theme.FONT_LABEL[0], 8, "bold"))
+    cols = [str(c) for c in df.columns]
+    tree = ttk.Treeview(parent, columns=cols, show="headings", style=style,
+                        height=height or max(1, min(len(df), 14)))
+
+    def fmt(v):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "\u2014"
+        if isinstance(v, float):
+            return f"{v:.0f}" if v.is_integer() and abs(v) >= 1000 else f"{v:.4f}"
+        return str(v)
+
+    for c in cols:
+        tree.heading(c, text=c)
+        widest = max([body_font.measure(fmt(v)) for v in df[c].tolist()[:200]] + [0])
+        width = max(min_width, head_font.measure(c) + 18, min(520, widest + 18))
+        tree.column(c, width=width, minwidth=width, anchor="w", stretch=False)
+    for row in df.itertuples(index=False):
+        tree.insert("", "end", values=[fmt(v) for v in row])
+    return tree
+
+
+class AlertBadge(tk.Label):
+    """Alert level badge. Detected alerts are FILLED; Predicted alerts are
+    OUTLINED -- the detection/prediction distinction is central to the thesis."""
+
+    def __init__(self, parent, level: str, kind: str, bg: str = theme.BG_CARD):
+        color = theme.ALERT_LEVEL_COLORS.get(level, theme.TEXT_MUTED)
+        if kind == "Predicted":
+            super().__init__(parent, text=f"\u25cc PREDICTED \u00b7 {level}", bg=bg, fg=color,
+                             highlightbackground=color, highlightcolor=color, highlightthickness=2,
+                             font=(theme.FONT_LABEL[0], 8, "bold"), padx=6, pady=1, width=22)
+        else:
+            super().__init__(parent, text=f"\u25cf {(kind or 'ALERT').upper()} \u00b7 {level}", bg=color,
+                             fg="#0b0f14", highlightbackground=color, highlightthickness=2,
+                             font=(theme.FONT_LABEL[0], 8, "bold"), padx=6, pady=1, width=22)
+
+
+class HybridAlertRow(tk.Frame):
+    """One RF-LSTM alert: badge, host IP, recorded time, reason, tiers,
+    both forecast probabilities and the horizon. `alert` is a mapping with the
+    HybridAlert / hybrid_alerts fields."""
+
+    def __init__(self, parent, alert, tier_names, bg: str = theme.BG_CARD):
+        super().__init__(parent, bg=bg, pady=3)
+        AlertBadge(self, alert["level"], alert["kind"], bg=bg).grid(row=0, column=0, rowspan=3, sticky="w",
+                                                                    padx=(0, 10))
+        mono = theme.FONT_MONO_SMALL
+
+        def tier(t):
+            return tier_names[t] if 0 <= int(t) < len(tier_names) else f"Tier {t}"
+
+        top = f"{alert['host']:<18} {alert['window_start_utc'].replace('T', ' ').replace('Z', ' UTC')}"
+        tk.Label(self, text=top, bg=bg, fg=theme.TEXT_PRIMARY, font=(mono[0], 9, "bold"),
+                 anchor="w").grid(row=0, column=1, sticky="w")
+        tk.Label(self, text=alert["reason"], bg=bg, fg=theme.ALERT_LEVEL_COLORS.get(alert["level"], theme.TEXT_PRIMARY),
+                 font=theme.FONT_LABEL, anchor="w").grid(row=0, column=2, sticky="w", padx=(14, 0))
+        hm = f"{alert['horizon_minutes']:g}"
+        tiers = f"detected tier: {tier(alert['det_tier'])}   forecast tier (\u2264{hm} min): {tier(alert['fut_tier'])}"
+        probs = (f"P(any attack \u2264{hm} min) = {alert['p_attack_next']:.4f}   "
+                 f"P(escalation to compromise/DoS \u2264{hm} min) = {alert['p_severe_next']:.4f}")
+        tk.Label(self, text=tiers, bg=bg, fg=theme.TEXT_MUTED, font=mono,
+                 anchor="w").grid(row=1, column=1, columnspan=2, sticky="w")
+        tk.Label(self, text=probs, bg=bg, fg=theme.TEXT_MUTED, font=mono,
+                 anchor="w").grid(row=2, column=1, columnspan=2, sticky="w")
+        self.columnconfigure(2, weight=1)

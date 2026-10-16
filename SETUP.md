@@ -86,6 +86,13 @@ password: ChangeMe!2024
 You'll be forced to set a new password on first login. To reset this from
 scratch, delete `users.db` and relaunch.
 
+## 4b. Place the RF-LSTM hybrid artifacts
+
+Download the RF-LSTM Kaggle notebook's output zip and unzip it at the project
+root as `artifacts_rf_lstm/` (containing `models/`, `data/`, `reports/`,
+`figures/`). The folder is git-ignored. Details, and the parity check to run
+after replacing it: see "RF–LSTM hybrid artifacts" in Readme.md.
+
 ## 5. Run the app
 
 ```bash
