@@ -1,25 +1,25 @@
+# Only legacy/ (the retired XGBoost system and old UI) imports xgboost and ttkbootstrap; Vigil itself does not.
+# Kept pinned so the legacy code and notebook stay runnable for the thesis record.
 xgboost==3.2.0
 pandas==2.3.3
 numpy==2.2.6
 # Pinned to the version every *.joblib was pickled with on Kaggle (model_artifacts/ and
 # artifacts_rf_lstm/models/ both record 1.6.1). A different version triggers sklearn's
-# InconsistentVersionWarning, which the app prints and shows on the Hybrid Replay screen.
+# InconsistentVersionWarning, which the app prints and shows on the Live Replay and Settings screens.
 scikit-learn==1.6.1
 joblib==1.5.3
 ttkbootstrap==2.2.2
 bcrypt==5.0.0
 matplotlib==3.10.8
 pillow==12.3.0
+# Vigil UI toolkit (installs darkdetect and packaging)
+customtkinter==5.2.2
 
 # Needed for the RF-LSTM hybrid's LSTM layer (detection + forecast heads). Without it the
 # app still runs and shows the RF per-flow layer only. CPU build is enough:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 # (with pip 23.x, install typing-extensions/sympy/networkx/fsspec/jinja2/filelock from PyPI first)
 torch==2.14.1
-
-# Optional, only needed if you extend Analytics & Reports to export real PDFs
-# instead of the built-in HTML report:
-# fpdf2==2.8.8
 
 # Optional, only needed when freezing to a standalone .exe/binary:
 # pyinstaller==6.11.1

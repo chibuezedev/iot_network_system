@@ -1,165 +1,106 @@
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
+import customtkinter as ctk
 
 from app.auth import db
 from app.auth.reset_dialog import ResetPasswordDialog
-from app.common import theme
-from app.common.widgets import show_toast
+from app.brand.logo import mark_image
+from app.ui import theme, tokens as T
+from app.ui.widgets import button, label, show_toast
 
 
-class LoginScreen(ttk.Frame):
-    """Minimal, single-card login screen with a working forgot-password flow
-    and a forced reset for accounts still on a temporary password."""
+class LoginScreen(ctk.CTkFrame):
+    """Single-card sign-in with a working forgot-password flow and a forced
+    reset for accounts still on a temporary password (same auth as before)."""
 
     def __init__(self, parent, on_success):
-        super().__init__(parent, style="Root.TFrame")
+        super().__init__(parent, fg_color=T.BG, corner_radius=0)
         self.on_success = on_success
         self._show_password = False
         self.pack(fill="both", expand=True)
         self._build()
 
-
     def _build(self) -> None:
-        bg = tk.Frame(self, bg=theme.BG_PRIMARY)
-        bg.pack(fill="both", expand=True)
+        corner = ctk.CTkFrame(self, fg_color="transparent")
+        corner.place(relx=1.0, rely=0.0, anchor="ne", x=-20, y=16)
+        self.theme_switch = ctk.CTkSwitch(corner, text="Dark mode", command=self._toggle_theme,
+                                          font=theme.font("small"), text_color=T.MUTED,
+                                          progress_color=T.ACCENT)
+        self._sync_switch()
+        unsub = theme.on_change(self._sync_switch)
+        self.bind("<Destroy>", lambda e: unsub() if e.widget is self else None)
+        self.theme_switch.pack()
 
-        card = tk.Frame(
-            bg, bg=theme.BG_CARD, highlightbackground=theme.BORDER, highlightthickness=1
-        )
+        card = ctk.CTkFrame(self, fg_color=T.SURFACE, border_color=T.BORDER, border_width=1,
+                            corner_radius=16, width=420)
         card.place(relx=0.5, rely=0.5, anchor="center")
+        pad = ctk.CTkFrame(card, fg_color="transparent")
+        pad.pack(padx=40, pady=36)
 
-        pad = tk.Frame(card, bg=theme.BG_CARD, padx=44, pady=40)
-        pad.pack()
+        brand = ctk.CTkFrame(pad, fg_color="transparent")
+        brand.pack(anchor="w")
+        logo = ctk.CTkImage(light_image=mark_image(0), dark_image=mark_image(1), size=(44, 44))
+        ctk.CTkLabel(brand, image=logo, text="").pack(side="left")
+        label(brand, T.APP_NAME, "display").pack(side="left", padx=(12, 0))
+        label(pad, T.TAGLINE, "small", T.MUTED, wraplength=330).pack(anchor="w", pady=(8, 26))
 
-        tk.Label(
-            pad,
-            text=theme.APP_NAME,
-            bg=theme.BG_CARD,
-            fg=theme.TEXT_PRIMARY,
-            font=theme.FONT_LOGO,
-        ).pack(anchor="w")
-        tk.Label(
-            pad,
-            text="IoT Threat Detection & Predictive Risk Analytics",
-            bg=theme.BG_CARD,
-            fg=theme.TEXT_MUTED,
-            font=theme.FONT_LABEL,
-        ).pack(anchor="w", pady=(2, 32))
+        label(pad, "USERNAME", "small_bold", T.MUTED).pack(anchor="w")
+        self.username_entry = ctk.CTkEntry(pad, width=330, height=38, font=theme.font("body"),
+                                           fg_color=T.SURFACE_2, border_color=T.BORDER, text_color=T.TEXT)
+        self.username_entry.pack(anchor="w", pady=(4, 14))
 
-        self.username_var = tk.StringVar()
-        self.username_entry = self._field(pad, "Username", self.username_var)
-
-        self.password_var = tk.StringVar()
-        self.password_entry = self._field(
-            pad, "Password", self.password_var, show="\u2022", toggleable=True
-        )
+        label(pad, "PASSWORD", "small_bold", T.MUTED).pack(anchor="w")
+        row = ctk.CTkFrame(pad, fg_color="transparent")
+        row.pack(anchor="w", fill="x", pady=(4, 6))
+        self.password_entry = ctk.CTkEntry(row, width=260, height=38, show="•", font=theme.font("body"),
+                                           fg_color=T.SURFACE_2, border_color=T.BORDER, text_color=T.TEXT)
+        self.password_entry.pack(side="left", fill="x", expand=True)
+        self.toggle_btn = button(row, "Show", self._toggle_password, "ghost", width=62)
+        self.toggle_btn.pack(side="left", padx=(8, 0))
         self.password_entry.bind("<Return>", lambda e: self._attempt_login())
+        self.username_entry.bind("<Return>", lambda e: self.password_entry.focus_set())
 
-        forgot = tk.Label(
-            pad,
-            text="Forgot password?",
-            bg=theme.BG_CARD,
-            fg=theme.TEXT_MUTED,
-            font=(theme.FONT_LABEL[0], 9),
-            cursor="hand2",
-        )
-        forgot.pack(anchor="e", pady=(0, 22))
-        forgot.bind("<Button-1>", lambda e: self._open_forgot_password())
-        forgot.bind("<Enter>", lambda e: forgot.config(fg=theme.ACCENT_CYAN))
-        forgot.bind("<Leave>", lambda e: forgot.config(fg=theme.TEXT_MUTED))
+        forgot = button(pad, "Forgot password?", self._open_forgot_password, "ghost", height=26)
+        forgot.pack(anchor="e", pady=(0, 18))
 
-        self.login_btn = tk.Button(
-            pad,
-            text="SIGN IN",
-            command=self._attempt_login,
-            bg=theme.ACCENT_CYAN,
-            fg="#04141a",
-            activebackground="#67e8f9",
-            relief="flat",
-            bd=0,
-            font=(theme.FONT_LABEL[0], 10, "bold"),
-            cursor="hand2",
-            pady=9,
-        )
+        self.login_btn = button(pad, "Sign in", self._attempt_login, "primary", height=40)
         self.login_btn.pack(fill="x")
+        self.error_label = label(pad, "", "small", T.DANGER, wraplength=330)
+        self.error_label.pack(anchor="w", pady=(12, 0))
+        self.after(50, self.username_entry.focus_set)
 
-        self.error_label = tk.Label(
-            pad, text="", bg=theme.BG_CARD, fg="#f87171", font=(theme.FONT_LABEL[0], 8)
-        )
-        self.error_label.pack(anchor="w", pady=(14, 0))
+    # Kept as attributes for scripts that drive the login programmatically.
+    @property
+    def username_var(self):
+        return _EntryVar(self.username_entry)
 
-    def _field(
-        self,
-        parent,
-        label: str,
-        var: tk.StringVar,
-        show: str = "",
-        toggleable: bool = False,
-    ) -> tk.Entry:
-        tk.Label(
-            parent,
-            text=label.upper(),
-            bg=theme.BG_CARD,
-            fg=theme.TEXT_MUTED,
-            font=(theme.FONT_LABEL[0], 8),
-        ).pack(anchor="w", pady=(0, 4))
+    @property
+    def password_var(self):
+        return _EntryVar(self.password_entry)
 
-        row = tk.Frame(parent, bg=theme.BG_CARD)
-        row.pack(fill="x")
+    def _toggle_theme(self) -> None:
+        theme.set_mode("dark" if self.theme_switch.get() else "light")
 
-        entry = tk.Entry(
-            row,
-            textvariable=var,
-            show=show,
-            bg=theme.BG_CARD,
-            fg=theme.TEXT_PRIMARY,
-            insertbackground=theme.TEXT_PRIMARY,
-            relief="flat",
-            bd=0,
-            font=theme.FONT_LABEL,
-            highlightthickness=0,
-        )
-        entry.pack(side="left", fill="x", expand=True, ipady=6)
+    def _sync_switch(self) -> None:
+        if self.theme_switch.winfo_exists():
+            (self.theme_switch.select if theme.mode() == "dark" else self.theme_switch.deselect)()
 
-        if toggleable:
-            toggle = tk.Label(
-                row,
-                text="show",
-                bg=theme.BG_CARD,
-                fg=theme.TEXT_MUTED,
-                font=(theme.FONT_LABEL[0], 8),
-                cursor="hand2",
-            )
-            toggle.pack(side="right")
-
-            def _toggle(_e=None):
-                self._show_password = not self._show_password
-                entry.config(show="" if self._show_password else "\u2022")
-                toggle.config(text="hide" if self._show_password else "show")
-
-            toggle.bind("<Button-1>", _toggle)
-
-        underline = tk.Frame(parent, bg=theme.BORDER, height=2)
-        underline.pack(fill="x", pady=(4, 18))
-        entry.bind("<FocusIn>", lambda e: underline.config(bg=theme.ACCENT_CYAN))
-        entry.bind("<FocusOut>", lambda e: underline.config(bg=theme.BORDER))
-        return entry
+    def _toggle_password(self) -> None:
+        self._show_password = not self._show_password
+        self.password_entry.configure(show="" if self._show_password else "•")
+        self.toggle_btn.configure(text="Hide" if self._show_password else "Show")
 
     def _attempt_login(self) -> None:
-        username = self.username_var.get().strip()
-        password = self.password_var.get()
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get()
         if not username or not password:
             self._show_error("Enter both username and password.")
             return
-
         user_row = db.verify_login(username, password)
         if user_row is None:
             self._show_error("Invalid username or password.")
-            self.password_var.set("")
+            self.password_entry.delete(0, "end")
             return
-
         self._show_error("")
         if user_row["must_reset_password"]:
             self._force_password_reset(username)
@@ -168,23 +109,29 @@ class LoginScreen(ttk.Frame):
 
     def _force_password_reset(self, username: str) -> None:
         def _done(_username: str) -> None:
-            refreshed = db.get_user(username)
-            self.on_success(refreshed)
+            self.on_success(db.get_user(username))
 
-        ResetPasswordDialog(
-            self.winfo_toplevel(), on_complete=_done, username=username, forced=True
-        )
+        ResetPasswordDialog(self.winfo_toplevel(), on_complete=_done, username=username, forced=True)
 
     def _open_forgot_password(self) -> None:
         def _done(_username: str) -> None:
-            show_toast(
-                self.winfo_toplevel(),
-                "Password updated",
-                "Sign in with your new password.",
-                "warning",
-            )
+            show_toast(self, "Password updated", "Sign in with your new password.", "success")
 
         ResetPasswordDialog(self.winfo_toplevel(), on_complete=_done)
 
     def _show_error(self, message: str) -> None:
-        self.error_label.config(text=message)
+        self.error_label.configure(text=message)
+
+
+class _EntryVar:
+    """Minimal StringVar-like adapter over a CTkEntry (get/set)."""
+
+    def __init__(self, entry):
+        self.entry = entry
+
+    def get(self) -> str:
+        return self.entry.get()
+
+    def set(self, value: str) -> None:
+        self.entry.delete(0, "end")
+        self.entry.insert(0, value)

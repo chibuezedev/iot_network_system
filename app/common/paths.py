@@ -28,7 +28,11 @@ def user_data_path(*parts: str) -> str:
     Falls back to project root when running from source.
     """
     if getattr(sys, "frozen", False):
-        base = os.path.join(os.path.expanduser("~"), ".sentineliot")
+        home = os.path.expanduser("~")
+        base = os.path.join(home, ".vigil")
+        old = os.path.join(home, ".sentineliot")      # pre-rename builds: keep their users.db working
+        if not os.path.exists(base) and os.path.isdir(old):
+            base = old
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, *parts)
     return resource_path(*parts)

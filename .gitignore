@@ -24,6 +24,8 @@ dist/
 *.sqlite
 *.sqlite3
 users.db
+prefs.json
+prefs.json.tmp
 
 # PyInstaller build output
 *.spec

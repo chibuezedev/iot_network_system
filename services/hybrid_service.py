@@ -39,8 +39,10 @@ import numpy as np
 import pandas as pd
 
 from app.common.paths import resource_path
+from services import prefs
 
-ARTIFACT_DIR = resource_path("artifacts_rf_lstm")
+# Settings may point at another unzipped Kaggle output folder (applied at next start).
+ARTIFACT_DIR = prefs.get("artifacts_dir") or resource_path("artifacts_rf_lstm")
 MODEL_DIR = os.path.join(ARTIFACT_DIR, "models")
 DATA_DIR = os.path.join(ARTIFACT_DIR, "data")
 REPORTS_DIR = os.path.join(ARTIFACT_DIR, "reports")
@@ -50,7 +52,7 @@ REPLAY_FLOWS_PATH = os.path.join(DATA_DIR, "replay_flows.csv")
 DASHBOARD_FEED_PATH = os.path.join(DATA_DIR, "dashboard_feed.csv")
 
 # Requested AND achieved speed, so the banner never overstates how fast the replay runs.
-REPLAY_MODE_LABEL = "Replay of recorded ToN_IoT traffic (requested {requested}, actual {actual} speed)"
+REPLAY_MODE_LABEL = "Replay of recorded ToN_IoT traffic (requested {requested}, actual {actual})"
 
 
 def _load_inference_module():
@@ -146,7 +148,11 @@ def alert_kind(reason: str) -> str:
 
 
 class AlertTracker:
-    """One alert per host per level until that host's level changes."""
+    """One alert per host per level until that host's level changes.
+
+    Windows with a partial lookback (fewer than `lookback` windows of history
+    inside replay_flows.csv) never create alerts and do not update a host's
+    last level, so the first complete window is judged on its own."""
 
     def __init__(self):
         self._last: dict[str, str] = {}
@@ -156,6 +162,8 @@ class AlertTracker:
 
     def update(self, step: ReplayStep) -> list[HybridAlert]:
         out: list[HybridAlert] = []
+        if not step.lookback_complete:
+            return out
         if not step.lstm_available or step.hosts.empty or "alert" not in step.hosts:
             return out
         for r in step.hosts.itertuples(index=False):
@@ -339,7 +347,7 @@ class HybridService:
 # ---------------------------------------------------------------- worker
 class HybridReplayEngine:
     """Runs iter_replay() on a background thread and posts ReplayStep objects to
-    result_queue (drained on the Tk thread, same pattern as SimulationEngine).
+    result_queue, which the Tk thread drains (Tk widgets are never touched from the worker).
 
     Pacing: windows are emitted window_sec / speed seconds of wall time apart
     (the next window is computed while waiting). When model compute takes longer
@@ -365,7 +373,7 @@ class HybridReplayEngine:
 
     @property
     def mode_label(self) -> str:
-        actual = f"~×{_round_sig(self.actual_speed)}" if self.actual_speed else "measuring…"
+        actual = f"~×{_round_sig(self.actual_speed)}" if self.actual_speed else "speed being measured"
         return REPLAY_MODE_LABEL.format(requested=f"×{self.speed:g}", actual=actual)
 
     def is_running(self) -> bool:
