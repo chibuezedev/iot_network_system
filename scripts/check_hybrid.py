@@ -2,7 +2,10 @@
 check_hybrid.py -- parity check between the dashboard's hybrid service and the
 Kaggle-exported dashboard_feed.csv (the same check the training notebook passes).
 
-For feed rows whose host appears in replay_flows.csv:
+replay_flows.csv may hold only a slice of the test period (e.g. one block of a
+blocked split), so only feed rows inside the replay's recorded time range are
+checked:  win_ts >= floor((min ts - t0) / window_sec) * window_sec + t0  and
+win_ts <= max ts.  For those rows whose host appears in replay_flows.csv:
   1. direct: run analyse() on that host's flows from the preceding `lookback`
      windows with window_start = the row's win_ts, and compare
      p_attack_next (tol 1e-4), det_tier and fut_tier with the feed row;
@@ -29,7 +32,7 @@ from services.hybrid_service import HybridService  # noqa: E402
 TOL = 1e-4
 
 
-def compare(feed_row, got, errors, where):
+def compare(feed_row, got, errors, where, note=""):
     p_ok = abs(float(got["p_attack_next"]) - float(feed_row["p_attack_next"])) <= TOL
     d_ok = int(got["det_tier"]) == int(feed_row["det_tier"])
     f_ok = int(got["fut_tier"]) == int(feed_row["fut_tier"])
@@ -37,8 +40,18 @@ def compare(feed_row, got, errors, where):
         errors.append(f"[{where}] {feed_row['entity']} @ {feed_row['window_start_utc']}: "
                       f"p_attack_next {got['p_attack_next']:.7f} vs {feed_row['p_attack_next']:.7f}, "
                       f"det_tier {got['det_tier']} vs {feed_row['det_tier']}, "
-                      f"fut_tier {got['fut_tier']} vs {feed_row['fut_tier']}")
+                      f"fut_tier {got['fut_tier']} vs {feed_row['fut_tier']}{note}")
     return abs(float(got["p_attack_next"]) - float(feed_row["p_attack_next"]))
+
+
+def lookback_note(svc, k) -> str:
+    """Explain a mismatch caused by history missing from replay_flows.csv (diagnostic only)."""
+    have = svc.lookback_available(k)
+    if have >= svc.lookback:
+        return ""
+    first, _ = svc.replay_windows()
+    return (f"  [lookback: only {have} of {svc.lookback} windows are in replay_flows.csv, which starts at "
+            f"{svc.to_utc(svc.window_start(first))}; the feed used the full history]")
 
 
 def main() -> int:
@@ -60,14 +73,22 @@ def main() -> int:
     flows = svc.replay_flows()
     feed = svc.dashboard_feed()
     hosts = set(flows["dst_ip"].astype(str).str.strip().unique())
-    eligible = feed[feed["entity"].isin(hosts)].reset_index(drop=True)
+    ts_min, ts_max = float(flows["ts"].min()), float(flows["ts"].max())
+    range_lo = np.floor((ts_min - svc.t0) / svc.window_sec) * svc.window_sec + svc.t0
+    in_range = feed[(feed["win_ts"] >= range_lo) & (feed["win_ts"] <= ts_max)]
+    eligible = in_range[in_range["entity"].isin(hosts)].reset_index(drop=True)
+    print(f"replay_flows.csv: {len(flows)} flows, {len(hosts)} hosts, recorded "
+          f"{svc.to_utc(ts_min)} -> {svc.to_utc(ts_max)}")
+    print(f"feed rows: {len(feed)} total, {len(in_range)} inside the replay time range "
+          f"[{svc.to_utc(range_lo)}, {svc.to_utc(ts_max)}], {len(eligible)} of those for replay hosts")
     if eligible.empty:
-        print("No feed rows for hosts present in replay_flows.csv -- nothing to check.")
+        print("No feed rows inside the replay time range for hosts present in replay_flows.csv -- "
+              "nothing to check.")
         return 1
     if args.sample and args.sample < len(eligible):
         eligible = eligible.sample(args.sample, random_state=args.seed).reset_index(drop=True)
-    print(f"feed rows: {len(feed)}  eligible (host in replay): {len(eligible)}  "
-          f"hosts: {eligible['entity'].nunique()}  windows: {eligible['win_ts'].nunique()}")
+    print(f"checking {len(eligible)} rows  (hosts: {eligible['entity'].nunique()}, "
+          f"windows: {eligible['win_ts'].nunique()})")
 
     # ---- 1. direct analyse() per feed row --------------------------------
     k_all = svc.window_index(flows["ts"].values)
@@ -77,16 +98,19 @@ def main() -> int:
         k = int(svc.window_index([row["win_ts"]])[0])
         assert abs(svc.window_start(k) - float(row["win_ts"])) < 1e-6, "win_ts not on the t0 + k*W grid"
         m = (k_all > k - svc.lookback) & (k_all <= k) & (flows["dst_ip"].values == row["entity"])
+        note = lookback_note(svc, k)
         res = svc.analyse(flows[m], window_start=float(row["win_ts"]))
-        res = res[res["entity"] == row["entity"]]
+        if not res.empty and "entity" in res:
+            res = res[res["entity"] == row["entity"]]
         if res.empty:
-            errors.append(f"[direct] {row['entity']} @ {row['window_start_utc']}: no result")
+            errors.append(f"[direct] {row['entity']} @ {row['window_start_utc']}: analyse() returned no result "
+                          f"for this in-range row ({int(m.sum())} flows for this host in its lookback){note}")
             continue
         got = res.iloc[0]
         if got["window_start_utc"] != row["window_start_utc"]:
             errors.append(f"[direct] window_start_utc {got['window_start_utc']} vs {row['window_start_utc']}")
-        max_dp = max(max_dp, compare(row, got, errors, "direct"))
-    print(f"direct analyse(): {len(eligible)} rows, max |dp_attack_next| = {max_dp:.2e}, "
+        max_dp = max(max_dp, compare(row, got, errors, "direct", note))
+    print(f"direct analyse(): {len(eligible)} rows checked, max |dp_attack_next| = {max_dp:.2e}, "
           f"mismatches = {len(errors)}")
 
     # ---- 2. through the replay iterator -----------------------------------
@@ -100,14 +124,15 @@ def main() -> int:
                 key = (got["entity"], float(step.window_start))
                 if key in want:
                     checked += 1
-                    max_dp_r = max(max_dp_r, compare(pd.Series(want[key]._asdict()), got, errors, "replay"))
+                    max_dp_r = max(max_dp_r, compare(pd.Series(want[key]._asdict()), got, errors, "replay",
+                                                     lookback_note(svc, step.k)))
         missing = len(want) - checked
         if missing:
-            errors.append(f"[replay] {missing} eligible feed rows never produced by the iterator")
+            errors.append(f"[replay] {missing} in-range feed rows never produced by the iterator")
         print(f"replay iterator: {steps} windows, {checked} feed rows matched, "
               f"max |dp_attack_next| = {max_dp_r:.2e}, mismatches = {len(errors) - n_err_before}")
 
-    for e in errors[:20]:
+    for e in errors[:50]:
         print("MISMATCH", e)
     if errors:
         print(f"FAIL: {len(errors)} mismatches")

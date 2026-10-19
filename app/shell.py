@@ -1,335 +1,190 @@
+"""Vigil app shell: sidebar navigation, theme switch, and the replay pipeline
+(queue drain -> per-host history -> de-duplicated alerts -> listeners)."""
 from __future__ import annotations
 
-import time
-import tkinter as tk
-from tkinter import ttk
+import importlib
+
+import customtkinter as ctk
 
 from app.auth import db
-from app.common import theme
-from app.common.context import AppContext
-from app.common.widgets import LiveIndicator, RoleBadge, show_toast
+from app.brand.logo import mark_image
+from app.context import AppContext
+from app.ui import theme, tokens as T
+from app.ui.widgets import Badge, RateLimiter, button, label, show_toast
 
-NAV_ITEMS = [
-    ("dashboard", "\u25a6  Dashboard"),
-    ("hybrid_replay", "\u25c9  Hybrid Replay"),
-    ("risk_timeline", "\u2197  Risk Timeline"),
-    ("alerts", "\u26a0  Alerts"),
-    ("model_comparison", "\u2261  Model Comparison"),
-    ("live_monitor", "\u25b6  Baseline: XGBoost"),
-    ("analytics", "\u25a4  Analytics & Reports"),
-    ("model_info", "\u2699  Model Info"),
-    ("user_management", "\U0001f465  User Management"),
-    ("settings", "\u2699  Settings"),
+NAV = [
+    ("overview", "Overview", "◫"),
+    ("live_replay", "Live Replay", "▶"),
+    ("alerts", "Alerts", "⚠"),
+    ("risk_timeline", "Risk Timeline", "↗"),
+    ("evaluation", "Model Evaluation", "≡"),
+    ("about", "About the model", "ⓘ"),
+    ("settings", "Settings", "⚙"),
+    ("users", "Users", "☺"),          # administrators only
 ]
+SCREENS = {
+    "overview": ("app.screens.overview", "OverviewScreen"),
+    "live_replay": ("app.screens.live_replay", "LiveReplayScreen"),
+    "alerts": ("app.screens.alerts", "AlertsScreen"),
+    "risk_timeline": ("app.screens.risk_timeline", "RiskTimelineScreen"),
+    "evaluation": ("app.screens.evaluation", "EvaluationScreen"),
+    "about": ("app.screens.about", "AboutScreen"),
+    "settings": ("app.screens.settings", "SettingsScreen"),
+    "users": ("app.screens.users", "UsersScreen"),
+}
 
 
-class Shell(ttk.Frame):
+class Shell(ctk.CTkFrame):
     def __init__(self, parent, ctx: AppContext, on_logout):
-        super().__init__(parent, style="Root.TFrame")
+        super().__init__(parent, fg_color=T.BG, corner_radius=0)
         self.ctx = ctx
         self.on_logout = on_logout
-        self.ctx.navigate = self.navigate
-        self._frames: dict[str, tk.Widget] = {}
-        self._current_key: str | None = None
-        self._session_start = time.time()
+        ctx.navigate = self.navigate
+        ctx.toast = lambda title, msg, kind="info": show_toast(self, title, msg, kind)
+        self._frames: dict[str, ctk.CTkFrame] = {}
+        self._buttons: dict[str, ctk.CTkButton] = {}
+        self._current: str | None = None
+        self._toast_limit = RateLimiter(1.5)
         self.pack(fill="both", expand=True)
-        self._last_toast_time = 0.0
-        self._toast_cooldown_seconds = 1.5
         self._build()
-        self._tick_session_timer()
+        self.navigate("overview")
+        self.after(80, self._poll)
+        self.after(500, self._refresh_status)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+        side = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=T.SIDEBAR_WIDTH)
+        side.grid(row=0, column=0, sticky="ns")
+        side.grid_propagate(False)
+        side.pack_propagate(False)
 
-        # Top bar
-        topbar = tk.Frame(self, bg=theme.BG_SECONDARY, height=48)
-        topbar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        topbar.grid_propagate(False)
+        brand = ctk.CTkFrame(side, fg_color="transparent")
+        brand.pack(fill="x", padx=18, pady=(20, 22))
+        logo = ctk.CTkImage(light_image=mark_image(0), dark_image=mark_image(1), size=(30, 30))
+        ctk.CTkLabel(brand, image=logo, text="").pack(side="left")
+        label(brand, T.APP_NAME, "h1").pack(side="left", padx=(10, 0))
 
-        tk.Label(
-            topbar,
-            text=f"\u25c9 {theme.APP_NAME}",
-            bg=theme.BG_SECONDARY,
-            fg=theme.ACCENT_CYAN,
-            font=theme.FONT_LOGO,
-        ).pack(side="left", padx=16)
-
-        right = tk.Frame(topbar, bg=theme.BG_SECONDARY)
-        right.pack(side="right", padx=16)
-
-        self.logout_btn = tk.Button(
-            right,
-            text="Log out",
-            command=self.on_logout,
-            bg=theme.BG_SECONDARY,
-            fg=theme.TEXT_MUTED,
-            activebackground=theme.BG_CARD,
-            relief="flat",
-            font=(theme.FONT_LABEL[0], 9),
-            cursor="hand2",
-        )
-        self.logout_btn.pack(side="right", padx=(12, 0))
-
-        self.session_label = tk.Label(
-            right,
-            text="Session 00:00",
-            bg=theme.BG_SECONDARY,
-            fg=theme.TEXT_MUTED,
-            font=theme.FONT_MONO_SMALL,
-        )
-        self.session_label.pack(side="right", padx=12)
-
-        status_frame = tk.Frame(right, bg=theme.BG_SECONDARY)
-        status_frame.pack(side="right", padx=12)
-        self.status_indicator = LiveIndicator(status_frame)
-        self.status_indicator.set_color(theme.TEXT_MUTED)
-        self.status_indicator.pack(side="left", padx=(0, 6))
-        self.status_label = tk.Label(
-            status_frame,
-            text="Paused",
-            bg=theme.BG_SECONDARY,
-            fg=theme.TEXT_MUTED,
-            font=(theme.FONT_LABEL[0], 9),
-        )
-        self.status_label.pack(side="left")
-
-        RoleBadge(right, self.ctx.role).pack(side="right", padx=12)
-        tk.Label(
-            right,
-            text=self.ctx.username,
-            bg=theme.BG_SECONDARY,
-            fg=theme.TEXT_PRIMARY,
-            font=(theme.FONT_LABEL[0], 10, "bold"),
-        ).pack(side="right")
-
-        # Sidebar
-        sidebar = tk.Frame(self, bg=theme.BG_SECONDARY, width=210)
-        sidebar.grid(row=1, column=0, sticky="ns")
-        sidebar.grid_propagate(False)
-
-        self._nav_buttons: dict[str, tk.Label] = {}
-        for key, label in NAV_ITEMS:
-            if key == "user_management" and not self.ctx.is_admin():
+        for key, text, icon in NAV:
+            if key == "users" and not self.ctx.is_admin():
                 continue
-            btn = tk.Label(
-                sidebar,
-                text=label,
-                bg=theme.BG_SECONDARY,
-                fg=theme.TEXT_MUTED,
-                anchor="w",
-                font=theme.FONT_LABEL,
-                padx=18,
-                pady=10,
-                cursor="hand2",
-            )
-            btn.pack(fill="x")
-            btn.bind("<Button-1>", lambda e, k=key: self.navigate(k))
-            btn.bind("<Enter>", lambda e, b=btn, k=key: self._hover(b, k, True))
-            btn.bind("<Leave>", lambda e, b=btn, k=key: self._hover(b, k, False))
-            self._nav_buttons[key] = btn
+            b = ctk.CTkButton(side, text=f"  {icon}   {text}", anchor="w", height=38, corner_radius=8,
+                              font=theme.font("body"), fg_color="transparent", hover_color=T.SURFACE_2,
+                              text_color=T.MUTED, command=lambda k=key: self.navigate(k))
+            b.pack(fill="x", padx=10, pady=1)
+            self._buttons[key] = b
 
-        # Content area
-        self.content = tk.Frame(self, bg=theme.BG_PRIMARY)
-        self.content.grid(row=1, column=1, sticky="nsew")
+        bottom = ctk.CTkFrame(side, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", padx=14, pady=16)
+        self.model_status = label(bottom, "", "small_bold", T.MUTED, wraplength=190)
+        self.model_status.pack(anchor="w")
+        self.replay_status = label(bottom, "", "small", T.MUTED, wraplength=190)
+        self.replay_status.pack(anchor="w", pady=(2, 12))
+        self.theme_switch = ctk.CTkSwitch(bottom, text="Dark mode", command=self._toggle_theme,
+                                          font=theme.font("small"), text_color=T.MUTED, progress_color=T.ACCENT)
+        self._sync_switch()
+        unsub = theme.on_change(self._sync_switch)
+        self.bind("<Destroy>", lambda e: unsub() if e.widget is self else None)
+        self.theme_switch.pack(anchor="w", pady=(0, 12))
+        who = ctk.CTkFrame(bottom, fg_color="transparent")
+        who.pack(fill="x")
+        label(who, self.ctx.username, "body_bold").pack(side="left")
+        label(who, self.ctx.role, "small", T.MUTED).pack(side="left", padx=(8, 0))
+        button(bottom, "Log out", self.on_logout, "secondary", height=30).pack(fill="x", pady=(10, 0))
 
-        self.navigate("dashboard")
-        self.after(80, self._poll_engine_queue)
+        self.content = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
+        self.content.grid(row=0, column=1, sticky="nsew")
+        self._set_model_status()
 
-    # ------------------------------------------------------------------
-    # Central queue drain: runs continuously regardless of which screen is
-    # visible, so counters/DB logging/toasts stay correct even if the user
-    # is looking at, say, Analytics while the simulation keeps running.
-    def _poll_engine_queue(self) -> None:
-        engine = self.ctx.engine
-        drained = 0
-        while drained < 200:  # cap per tick so a burst can't stall the UI
-            try:
-                result = engine.result_queue.get_nowait()
-            except Exception:
-                break
-            drained += 1
-            self._handle_result(result)
-        self._poll_hybrid_queue()
-        self.after(80, self._poll_engine_queue)
-
-    # ------------------------------------------------------------------
-    # RF-LSTM hybrid replay: same drain pattern, separate state from the
-    # legacy counters. Every time used here is step.window_start (recorded).
-    def _poll_hybrid_queue(self) -> None:
-        engine = self.ctx.hybrid_engine
-        if engine is None:
-            return
-        for _ in range(20):
-            try:
-                step = engine.result_queue.get_nowait()
-            except Exception:
-                break
-            self._handle_hybrid_step(step)
-
-    def _handle_hybrid_step(self, step) -> None:
-        ctx = self.ctx
-        ctx.hybrid_last_step = step
-        new_alerts = ctx.hybrid_tracker.update(step)
-        for alert in new_alerts:
-            if ctx.hybrid_run_id is not None:
-                db.log_hybrid_alert(ctx.hybrid_run_id, alert.__dict__)
-        if new_alerts:
-            worst = min(new_alerts, key=lambda a: theme.ALERT_LEVEL_ORDER.index(a.level))
-            now = time.time()  # toast rate-limit only; never an event time
-            if worst.level in ("CRITICAL", "HIGH") and (now - self._last_toast_time) >= self._toast_cooldown_seconds:
-                self._last_toast_time = now
-                more = f" (+{len(new_alerts) - 1} more)" if len(new_alerts) > 1 else ""
-                show_toast(
-                    self.winfo_toplevel(),
-                    f"{worst.level} · {worst.kind}",
-                    f"{worst.host} at {worst.window_start_utc} (recorded){more}\n{worst.reason}",
-                    "critical" if worst.level == "CRITICAL" else "warning",
-                )
-        for listener in list(ctx.hybrid_listeners):
-            try:
-                listener(step, new_alerts)
-            except Exception:
-                pass
-
-    def _handle_result(self, result) -> None:
-        ctx = self.ctx
-        c = ctx.counters
-        c.total_flows += 1
-        if result.is_attack:
-            c.total_attacks += 1
-            c.attack_type_counts[result.predicted_label] = (
-                c.attack_type_counts.get(result.predicted_label, 0) + 1
-            )
-        c.severity_tier_counts[result.severity_tier] = (
-            c.severity_tier_counts.get(result.severity_tier, 0) + 1
-        )
-        c.highest_severity_tier = max(c.highest_severity_tier, result.severity_tier)
-
-        ctx.recent_events.append(result)
-        if len(ctx.recent_events) > ctx.max_recent_events:
-            ctx.recent_events.pop(0)
-
-        is_flagged = result.severity_tier >= 3 or (
-            result.is_attack
-            and result.detection_confidence >= ctx.alert_confidence_threshold
-        )
-        if is_flagged:
-            c.active_alerts += 1
-            if ctx.session_id is not None:
-                db.log_event(
-                    ctx.session_id,
-                    {
-                        "sim_time": result.sim_time,
-                        "device_name": result.device_name,
-                        "device_ip": result.device_ip,
-                        "protocol": result.protocol,
-                        "predicted_label": result.predicted_label,
-                        "detection_confidence": result.detection_confidence,
-                        "severity_tier": result.severity_tier,
-                        "severity_label": result.severity_label,
-                        "severity_confidence": result.severity_confidence,
-                        "feature_snapshot": result.feature_snapshot,
-                    },
-                )
-            if result.severity_tier >= 3:
-                now = time.time()
-                if (now - self._last_toast_time) >= self._toast_cooldown_seconds:
-                    self._last_toast_time = now
-                    kind = "critical" if result.severity_tier == 4 else "warning"
-                    show_toast(
-                        self.winfo_toplevel(),
-                        f"{theme.SEVERITY_LABELS[result.severity_tier]} severity",
-                        f"{result.predicted_label} from {result.src_ip} ({result.detection_confidence:.0%} conf.)",
-                        kind,
-                    )
-
-        for listener in list(ctx.result_listeners):
-            try:
-                listener(result)
-            except Exception:
-                pass
-
-    def _hover(self, btn: tk.Label, key: str, entering: bool) -> None:
-        if key == self._current_key:
-            return
-        btn.config(bg=theme.BG_CARD if entering else theme.BG_SECONDARY)
-
-    def set_live_status(self, live: bool, text: str = "Live") -> None:
-        if live:
-            self.status_indicator.set_color(theme.ACCENT_GREEN)
-            self.status_indicator.start()
-            self.status_label.config(text=text, fg=theme.ACCENT_GREEN)
+    def _set_model_status(self) -> None:
+        h = self.ctx.hybrid
+        if h is None:
+            self.model_status.configure(text="✖ Model not loaded", text_color=T.DANGER)
+        elif h.lstm_available:
+            self.model_status.configure(text="● RF–LSTM hybrid loaded", text_color=T.ALERT["NORMAL"])
         else:
-            self.status_indicator.stop()
-            self.status_indicator.set_color(theme.TEXT_MUTED)
-            self.status_label.config(text="Paused", fg=theme.TEXT_MUTED)
+            self.model_status.configure(text="⚠ RF-only fallback (LSTM unavailable)", text_color=T.ALERT["HIGH"])
 
-    def _tick_session_timer(self) -> None:
-        elapsed = int(time.time() - self._session_start)
-        m, s = divmod(elapsed, 60)
-        h, m = divmod(m, 60)
-        self.session_label.config(text=f"Session {h:02d}:{m:02d}:{s:02d}")
-        self.after(1000, self._tick_session_timer)
+    def _refresh_status(self) -> None:
+        if not self.winfo_exists():
+            return
+        e = self.ctx.engine
+        if e is None:
+            text = ""
+        elif e.error:
+            text = f"Replay error: {e.error}"
+        elif e.is_running():
+            text = ("Replay paused" if e.is_paused() else f"Replaying ×{e.speed:g}") + \
+                   (f" · {self.ctx.last_step.window_start_utc}" if self.ctx.last_step else "")
+        elif e.finished:
+            text = "Replay complete"
+        else:
+            text = "Replay idle"
+        self.replay_status.configure(text=text)
+        self.after(500, self._refresh_status)
+
+    def _toggle_theme(self) -> None:
+        theme.set_mode("dark" if self.theme_switch.get() else "light")
+
+    def _sync_switch(self) -> None:
+        if self.theme_switch.winfo_exists():
+            (self.theme_switch.select if theme.mode() == "dark" else self.theme_switch.deselect)()
 
     # ------------------------------------------------------------------
     def navigate(self, key: str) -> None:
-        for k, btn in self._nav_buttons.items():
-            btn.config(
-                bg=theme.BG_CARD if k == key else theme.BG_SECONDARY,
-                fg=theme.ACCENT_CYAN if k == key else theme.TEXT_MUTED,
-            )
-        self._current_key = key
-
+        if key not in SCREENS or (key == "users" and not self.ctx.is_admin()):
+            return
+        for k, b in self._buttons.items():
+            active = k == key
+            b.configure(fg_color=T.SURFACE_2 if active else "transparent",
+                        text_color=T.ACCENT if active else T.MUTED,
+                        font=theme.font("body_bold" if active else "body"))
         if key not in self._frames:
-            self._frames[key] = self._build_frame(key)
-        for frame in self._frames.values():
-            frame.pack_forget()
+            module, cls = SCREENS[key]
+            self._frames[key] = getattr(importlib.import_module(module), cls)(self.content, self.ctx)
+        for k, f in self._frames.items():
+            if k != key:
+                f.pack_forget()
         frame = self._frames[key]
         frame.pack(fill="both", expand=True)
-        if hasattr(frame, "on_show"):
-            frame.on_show()
+        self._current = key
+        frame.on_show()
 
-    def _build_frame(self, key: str) -> tk.Widget:
-        if key == "dashboard":
-            from app.dashboard.view import DashboardView
+    # ------------------------------------------------------------------
+    # Replay pipeline. Every time used here is step.window_start (recorded).
+    def _poll(self) -> None:
+        if not self.winfo_exists():
+            return
+        e = self.ctx.engine
+        if e is not None:
+            for _ in range(20):
+                try:
+                    step = e.result_queue.get_nowait()
+                except Exception:
+                    break
+                self._handle_step(step)
+        self.after(80, self._poll)
 
-            return DashboardView(self.content, self.ctx)
-        if key == "live_monitor":
-            from app.live_monitor.view import LiveMonitorView
+    def _handle_step(self, step) -> None:
+        ctx = self.ctx
+        ctx.record_step(step)
+        new_alerts = ctx.tracker.update(step)       # partial-lookback windows never alert
+        for a in new_alerts:
+            if ctx.run_id is not None:
+                db.log_hybrid_alert(ctx.run_id, a.__dict__)
+        if new_alerts:
+            worst = min(new_alerts, key=lambda a: T.ALERT_ORDER.index(a.level))
+            if worst.level in ("CRITICAL", "HIGH") and self._toast_limit.ready():
+                more = f" (+{len(new_alerts) - 1} more)" if len(new_alerts) > 1 else ""
+                show_toast(self, f"{worst.level} · {worst.kind}",
+                           f"{worst.host} at {worst.window_start_utc} (recorded){more}\n{worst.reason}",
+                           "critical" if worst.level == "CRITICAL" else "warning")
+        for cb in list(ctx.step_listeners):
+            try:
+                cb(step, new_alerts)
+            except Exception:
+                pass
 
-            return LiveMonitorView(self.content, self.ctx, shell=self)
-        if key == "hybrid_replay":
-            from app.hybrid_replay.view import HybridReplayView
-
-            return HybridReplayView(self.content, self.ctx, shell=self)
-        if key == "risk_timeline":
-            from app.risk_timeline.view import RiskTimelineView
-
-            return RiskTimelineView(self.content, self.ctx)
-        if key == "model_comparison":
-            from app.model_comparison.view import ModelComparisonView
-
-            return ModelComparisonView(self.content, self.ctx)
-        if key == "alerts":
-            from app.alerts.view import AlertsView
-
-            return AlertsView(self.content, self.ctx)
-        if key == "analytics":
-            from app.analytics.view import AnalyticsView
-
-            return AnalyticsView(self.content, self.ctx)
-        if key == "model_info":
-            from app.model_info.view import ModelInfoView
-
-            return ModelInfoView(self.content, self.ctx)
-        if key == "user_management":
-            from app.user_management.view import UserManagementView
-
-            return UserManagementView(self.content, self.ctx)
-        if key == "settings":
-            from app.settings.view import SettingsView
-
-            return SettingsView(self.content, self.ctx)
-        raise ValueError(key)
+    def start_run(self) -> None:
+        self.ctx.start_run()

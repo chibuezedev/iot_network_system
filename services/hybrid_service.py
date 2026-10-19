@@ -39,8 +39,10 @@ import numpy as np
 import pandas as pd
 
 from app.common.paths import resource_path
+from services import prefs
 
-ARTIFACT_DIR = resource_path("artifacts_rf_lstm")
+# Settings may point at another unzipped Kaggle output folder (applied at next start).
+ARTIFACT_DIR = prefs.get("artifacts_dir") or resource_path("artifacts_rf_lstm")
 MODEL_DIR = os.path.join(ARTIFACT_DIR, "models")
 DATA_DIR = os.path.join(ARTIFACT_DIR, "data")
 REPORTS_DIR = os.path.join(ARTIFACT_DIR, "reports")
@@ -50,7 +52,7 @@ REPLAY_FLOWS_PATH = os.path.join(DATA_DIR, "replay_flows.csv")
 DASHBOARD_FEED_PATH = os.path.join(DATA_DIR, "dashboard_feed.csv")
 
 # Requested AND achieved speed, so the banner never overstates how fast the replay runs.
-REPLAY_MODE_LABEL = "Replay of recorded ToN_IoT traffic (requested {requested}, actual {actual} speed)"
+REPLAY_MODE_LABEL = "Replay of recorded ToN_IoT traffic (requested {requested}, actual {actual})"
 
 
 def _load_inference_module():
@@ -114,6 +116,15 @@ class ReplayStep:
     lstm_available: bool
     speed: float = 1.0                      # requested replay multiplier
     actual_speed: Optional[float] = None    # achieved multiplier (None until measured)
+    # How many of the `lookback` windows behind this one lie inside replay_flows.csv.
+    # Fewer than `lookback` means the file starts too late to supply the full history
+    # the model saw in training (e.g. the replay is a slice of a longer test block).
+    lookback_available: int = 0
+    lookback: int = 0
+
+    @property
+    def lookback_complete(self) -> bool:
+        return self.lookback_available >= self.lookback
 
 
 @dataclass
@@ -137,7 +148,11 @@ def alert_kind(reason: str) -> str:
 
 
 class AlertTracker:
-    """One alert per host per level until that host's level changes."""
+    """One alert per host per level until that host's level changes.
+
+    Windows with a partial lookback (fewer than `lookback` windows of history
+    inside replay_flows.csv) never create alerts and do not update a host's
+    last level, so the first complete window is judged on its own."""
 
     def __init__(self):
         self._last: dict[str, str] = {}
@@ -147,6 +162,8 @@ class AlertTracker:
 
     def update(self, step: ReplayStep) -> list[HybridAlert]:
         out: list[HybridAlert] = []
+        if not step.lookback_complete:
+            return out
         if not step.lstm_available or step.hosts.empty or "alert" not in step.hosts:
             return out
         for r in step.hosts.itertuples(index=False):
@@ -262,12 +279,20 @@ class HybridService:
 
     # ---- replay ----------------------------------------------------------
     def replay_windows(self) -> tuple[int, int]:
-        """(first, last) window index the replay evaluates.
+        """(first, last) window index covered by replay_flows.csv.
 
-        The first evaluated window is the first one with a full lookback of
-        recorded data behind it (same convention as the training notebook)."""
+        The replay evaluates every one of these windows. Windows near the start
+        may have fewer than `lookback` windows of recorded history inside the
+        file; each ReplayStep reports this (lookback_available), so the UI can
+        say so instead of the replay silently skipping them. A replay shorter
+        than `lookback` windows (e.g. a slice of a test block) still plays."""
         k = self.window_index(self.replay_flows()["ts"].values)
-        return int(k.min()) + self.lookback - 1, int(k.max())
+        return int(k.min()), int(k.max())
+
+    def lookback_available(self, k: int) -> int:
+        """Number of the `lookback` windows ending at k that lie inside replay_flows.csv."""
+        first, _ = self.replay_windows()
+        return int(max(0, min(self.lookback, k - first + 1)))
 
     def iter_replay(self, start_k: Optional[int] = None) -> Iterator[ReplayStep]:
         """Walk replay_flows.csv in ts order; at each window boundary run the engine
@@ -275,6 +300,7 @@ class HybridService:
         flows = self.replay_flows()
         k_all = self.window_index(flows["ts"].values)     # non-decreasing, since flows are ts-sorted
         first, last = self.replay_windows()
+        data_first = first
         if start_k is not None:
             first = max(first, int(start_k))
         total = last - first + 1
@@ -294,7 +320,9 @@ class HybridService:
                 hosts = hosts.sort_values("entity", kind="mergesort").reset_index(drop=True)
             yield ReplayStep(k=k, window_start=ws, window_start_utc=self.to_utc(ws), step=step,
                              total_steps=total, n_flows_window=int(hi - cur), hosts=hosts,
-                             rf_counts=rf_counts, lstm_available=self.lstm_available)
+                             rf_counts=rf_counts, lstm_available=self.lstm_available,
+                             lookback_available=int(min(self.lookback, k - data_first + 1)),
+                             lookback=self.lookback)
 
     def _rf_summary(self, window_flows: pd.DataFrame) -> tuple[dict, dict]:
         """Per-host counts of the RF's per-flow verdicts in the current window,
@@ -319,7 +347,7 @@ class HybridService:
 # ---------------------------------------------------------------- worker
 class HybridReplayEngine:
     """Runs iter_replay() on a background thread and posts ReplayStep objects to
-    result_queue (drained on the Tk thread, same pattern as SimulationEngine).
+    result_queue, which the Tk thread drains (Tk widgets are never touched from the worker).
 
     Pacing: windows are emitted window_sec / speed seconds of wall time apart
     (the next window is computed while waiting). When model compute takes longer
@@ -345,7 +373,7 @@ class HybridReplayEngine:
 
     @property
     def mode_label(self) -> str:
-        actual = f"~×{_round_sig(self.actual_speed)}" if self.actual_speed else "measuring…"
+        actual = f"~×{_round_sig(self.actual_speed)}" if self.actual_speed else "speed being measured"
         return REPLAY_MODE_LABEL.format(requested=f"×{self.speed:g}", actual=actual)
 
     def is_running(self) -> bool:

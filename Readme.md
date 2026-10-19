@@ -1,22 +1,17 @@
-# SentinelIoT
+# Vigil
 
-**ML-Based Network Surveillance System for Anomaly Detection and Predictive Analytics of Cyber Threats in the IoT**
+**Intelligent IoT network surveillance: anomaly detection and predictive threat analytics with an RF–LSTM hybrid**
 
-SentinelIoT is a desktop application for IoT network surveillance. Its primary model is an **RF–LSTM hybrid** trained on ToN_IoT network flows ordered by their recorded Zeek capture time: a Random Forest labels each flow, and an LSTM over a host's recent time windows **detects** the severity tier of the current window and **forecasts** the highest severity tier within the next horizon (the window, lookback and horizon are read from `preprocessing.json`). The app replays recorded test traffic through the hybrid in recorded order, at an adjustable speed, and always shows the recorded capture time.
+Vigil is the desktop dashboard for a PhD research project on ML-based IoT network surveillance. It runs an
+**RF–LSTM hybrid** over recorded ToN_IoT network traffic:
 
-The earlier two-model **XGBoost** system (Spotter + Risk Analyst) is kept as a per-flow **baseline**.
+- a **Random Forest** labels every flow, one at a time;
+- an **LSTM** reads each host's recent time windows and
+  - **detects** the severity tier of the current window, and
+  - **forecasts** the highest severity tier within the next horizon.
 
-This repository is the desktop deployment layer for a PhD research project. The trained models come from separate Kaggle notebooks (not included here; see [Model artifacts](#model-artifacts) below).
-
----
-
-## What it does
-
-- **RF–LSTM hybrid (primary).** It detects the current window's severity tier and forecasts P(any attack) and P(escalation to compromise/DoS) for the horizon ahead, per destination host IP. Alerts are NORMAL / WARNING / HIGH / CRITICAL with a reason that starts "Detected: …" or "Predicted: …", both from the engine in `sentinel_inference.py`.
-- **Replay of recorded traffic.** `replay_flows.csv` is processed in `ts` order and evaluated at each recorded window boundary. The screen is labelled "Replay of recorded ToN_IoT traffic (requested ×N, actual ~×M speed)". The actual speed is measured, because model compute can make the replay slower than requested. Only the speed is controlled by the user; every time shown comes from the data.
-- **Model comparison.** It shows the hybrid, standalone LSTM, standalone RF, the XGBoost baseline and persistence, as read from the run's report CSVs, together with the saved figures.
-- **Legacy XGBoost baseline.** Per-flow attack detection across 34 CICIoT2023 categories ("Spotter") and per-flow severity tiering on ToN_IoT connection data ("Risk Analyst"). Neither model forecasts. Its Live Monitor demo samples rows at random from a non-chronological feed.
-- **Logs everything** to a local SQLite database: legacy sessions and events, plus hybrid alerts (which carry the recorded window time).
+Traffic is replayed in recorded capture-time order, and every time Vigil shows is the recorded time. The models
+were trained in a separate Kaggle notebook; see [Model artifacts](#model-artifacts).
 
 ---
 
@@ -24,16 +19,17 @@ This repository is the desktop deployment layer for a PhD research project. The 
 
 | Screen | Purpose |
 |---|---|
-| Dashboard | Legacy XGBoost demo session summary (non-chronological sample) |
-| Hybrid Replay | RF–LSTM replay of recorded ToN_IoT traffic. Per host: detected tier, forecast tier, both forecast probabilities, RF per-flow verdict counts, alert level and reason. The recorded window time is shown in large type. |
-| Risk Timeline | For a chosen host, true tier vs. hybrid detected tier, and P(any attack) / P(escalation) with the dashed alert thresholds, over recorded time (`dashboard_feed.csv`) |
-| Alerts | Hybrid tab: one alert per host per level change. Filled badge = Detected, outlined badge = Predicted. Legacy tab: the original XGBoost alert table |
-| Model Comparison | Detection and forecast tables, flow-level, early-warning, efficiency and split-coverage tables, plus the figures, all read from `artifacts_rf_lstm/reports` and `figures` |
-| Baseline: XGBoost | The original Live Monitor, labelled "Baseline: XGBoost (CICIoT2023, per-flow, no forecasting)" |
-| Analytics & Reports | All-time stats for the legacy demo, session history, HTML report export |
-| Model Info | Purpose of all three models, the hybrid's test-period metrics (from the CSVs), and how detection, prediction and time differ between the two systems |
-| User Management | Add/deactivate users, change roles, force password resets (administrator only) |
-| Settings | Theme, alert sound, alert confidence threshold, default simulation speed |
+| Overview | Model status (hybrid or RF-only fallback), training-run facts, the replay file, the latest recorded window, alert counts for the current run, recent alerts and a risk sparkline per host |
+| Live Replay | Window-by-window replay of `replay_flows.csv`: a recorded-time clock, play/pause/stop, requested vs actual speed, and one card per host (detected tier, forecast tier, P(attack ahead), P(escalation ahead), RF verdict mix, alert badge) |
+| Alerts | RF–LSTM alerts only. Filter by run, level, type (Detected / Predicted), host and recorded time; open a detail drawer; export to CSV |
+| Risk Timeline | Per host: true tier and the hybrid's predicted risk over recorded time, with the dashed alert thresholds and a test-block selector |
+| Model Evaluation | Detection, forecast, early-warning, flow-level, efficiency and coverage tables, the figure gallery, an XGBoost tab, and HTML report export |
+| About the model | Architecture diagram, dataset, task definition, alert rules and limitations |
+| Settings | Light/dark theme, default replay speed, artifacts folder, and a button that re-runs the parity check |
+| Users | Administrators only: add, edit or deactivate users, change roles, force password resets |
+
+Badges: a **filled** badge means *Detected* (the current window is an attack tier). An **outlined** badge means
+*Predicted* (a forecast for the horizon ahead, not yet observed).
 
 ---
 
@@ -41,179 +37,151 @@ This repository is the desktop deployment layer for a PhD research project. The 
 
 ### Requirements
 
-- Python 3.10+
-- `tkinter` available as a system package (it does **not** install via pip):
-  - Ubuntu/Debian: `sudo apt-get install python3-tk`
-  - Fedora: `sudo dnf install python3-tkinter`
-  - macOS (python.org installer): bundled; Homebrew Python needs `brew install python-tk`
-  - Windows: bundled with the python.org installer (check "tcl/tk and IDLE" during install)
+- Python 3.10 (developed on 3.10.11)
+- `tkinter` from the system Python (on Windows, the python.org installer with "tcl/tk and IDLE")
 
 ### Install
 
 ```bash
-git clone <this-repo-url>
-cd sentineliot_app
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+The LSTM layer needs `torch`; the CPU build is enough:
+`pip install torch --index-url https://download.pytorch.org/whl/cpu`.
+
+If you have pip 23.x, install `typing-extensions sympy networkx fsspec jinja2 filelock` from PyPI first. Without
+torch, Vigil still runs and shows the RF per-flow layer, with a notice that the LSTM layer is unavailable.
+
+`scikit-learn` is pinned to the version the pickles were saved with. A mismatch is reported as an
+`InconsistentVersionWarning` and is not hidden.
+
 ### Model artifacts
 
-`model_artifacts/` and `data/simulation_feed.csv` are not tracked in this repository (see `.gitignore`) because they're large, binary, and derived from the training notebook rather than written by hand. Before running the app, place the following files into `model_artifacts/`:
+**Where they come from.** The RF–LSTM training notebook on Kaggle writes its outputs to a folder named
+`artifacts_rf_lstm/`. Download it as the notebook's output zip from the *Output* tab.
 
-```
-model_artifacts/
-  detection_model_xgboost.json
-  detection_label_encoder.joblib
-  detection_feature_columns.json
-  detection_class_names.json
-  severity_model_xgboost.json
-  severity_categorical_encoders.joblib
-  severity_feature_columns.json
-  severity_class_names.json
-  severity_tier_mapping.json
-```
-
-And a labeled feed file at `data/simulation_feed.csv` (same column layout the training notebook exports: the 46 Spotter feature columns + the Risk Analyst feature columns + a `true_label` column + `device_name` / `device_ip` display columns).
-
-No application code needs to change to swap these in. `models/inference.py` only depends on the filenames and the column-order files above, not on how the models were produced.
-
-#### RF–LSTM hybrid artifacts
-
-**Where they come from.** The RF–LSTM training notebook on Kaggle writes its outputs to a folder named `artifacts_rf_lstm/`. Download it as the notebook's output zip from the Kaggle notebook's *Output* tab.
-
-**Where to put them.** Unzip at the project root, so that the folder sits next to `main.py` and contains `models/`, `data/`, `reports/` and `figures/` directly (for example `artifacts_rf_lstm/models/preprocessing.json`). If the zip has an extra top-level folder, move its contents up one level.
-
-**Not in git.** `artifacts_rf_lstm/` is listed in `.gitignore`. The current artifacts are a development run (2 dataset files, normal and DoS traffic only) and will be replaced by the full 23-file run. Replace the whole folder; the app needs no code changes as long as the file names and schema stay the same. After replacing it, re-run `python scripts/check_hybrid.py`.
-
-The hybrid reads everything from `artifacts_rf_lstm/` (see `artifacts_rf_lstm/README.txt`):
+**Where to put them.** Unzip at the project root, so the folder sits next to `main.py` and contains `models/`,
+`data/`, `reports/` and `figures/` directly. If the zip has an extra top-level folder, move its contents up one
+level. You can also choose another folder under *Settings → Artifacts folder*; it is loaded at the next start.
 
 ```
 artifacts_rf_lstm/
   models/   sentinel_inference.py, rf_flow.joblib, hybrid_rf_lstm.pt, window_scaler.joblib,
-            preprocessing.json (window/lookback/horizon/t0, category maps, alert thresholds), baselines
-  data/     replay_flows.csv (raw test flows), dashboard_feed.csv (every test window, per host)
-  reports/  model_comparison.csv, flow_level_comparison.csv, early_warning.csv, efficiency.csv, ...
+            preprocessing.json (window/lookback/horizon/t0, category maps, thresholds, hosts), baselines
+  data/     replay_flows.csv (recorded test flows), dashboard_feed.csv (every test window, per host)
+  reports/  model_comparison.csv, early_warning.csv, flow_level_comparison.csv, efficiency.csv, ...
   figures/  *.png
+README.txt  dataset description (Vigil reads the dataset size from its "Data:" line)
 ```
 
-The app imports `sentinel_inference.py` and uses its `SentinelEngine`, `alert_level` and `TIER_NAMES` directly, so features and alert levels are computed exactly as they were in training. Thresholds, window settings, hosts, attack types and time ranges all come from these files, so a new run with the same file names and schema can replace the folder without code changes. Afterwards, re-run the parity check:
+`artifacts_rf_lstm/` is git-ignored. Vigil reads every threshold, window setting, host, attack type, time range
+and metric from these files, so a new run with the same file names and schema drops in without code changes.
+
+After replacing the folder, re-run the parity check, either from *Settings* or with:
 
 ```bash
-python scripts/check_hybrid.py     # analyse() vs dashboard_feed.csv: p_attack_next (tol 1e-4), det_tier, fut_tier
+python scripts/check_hybrid.py
 ```
 
-The LSTM layer needs `torch` (CPU build is fine). Without it, Hybrid Replay shows the RF per-flow layer and a message that the LSTM layer is unavailable. `scikit-learn` is pinned to the version the pickles were saved with; a mismatch is reported as an `InconsistentVersionWarning`, not hidden.
+It recomputes the hybrid's outputs for every `dashboard_feed.csv` row inside the replay's recorded time range and
+compares them with the notebook's values: `p_attack_next` within 1e-4, and `det_tier` and `fut_tier` exactly.
 
-### Seed the admin account
+### First sign-in
 
-On first run, the app creates `users.db` (SQLite) with one seeded account:
-
-```
-username: admin
-password: ChangeMe!2024
-```
-
-You'll be forced to set a new password on first login. To start over, delete `users.db` and relaunch.
+On first run Vigil creates `users.db` (SQLite) with one account, `admin` / `ChangeMe!2024`. You must set a new
+password at first sign-in. Existing `users.db` files keep working.
 
 ### Run
 
 ```bash
-python3 main.py
+python main.py
 ```
 
----
-
-## Demo flow
-
-1. Log in as `admin` (or create an `analyst` account under User Management).
-2. Open **Hybrid Replay**, choose a speed and press **Start**. The recorded window time advances through the test period, and each host shows its detected tier, forecast tier and both forecast probabilities.
-3. Open **Alerts**. In the hybrid tab, filled badges are detections and outlined badges are predictions. Filter by level or type and export to CSV.
-4. Open **Risk Timeline**, pick a host and compare the true tier with the hybrid's predicted risk and thresholds (switch on the logit scale to separate values near 1).
-5. Open **Model Comparison** for the detection and forecast tables and the saved figures.
-6. To show the baseline, open **Baseline: XGBoost**, press **Start** and optionally **Inject Attack Burst**. This is the legacy non-chronological demo.
-7. Open **Model Info** to walk through what each system does and does not do.
-
-Runs fully offline, no network connection required.
+Vigil runs fully offline.
 
 ---
 
-## Architecture notes
+## How it works
 
-**RF–LSTM hybrid: recorded time, real hosts.**
-- The hybrid is trained on the ToN_IoT processed network dataset, with flows ordered by their recorded Zeek capture time (`ts`). Flows are aggregated into fixed windows per destination host.
-- Layer 1 is a Random Forest that labels each flow. Layer 2 is an LSTM that reads the last `lookback` windows (window statistics plus the RF evidence) and has two heads:
-  - **detection**: the severity tier of the current window;
-  - **forecast**: the highest severity tier within the next `horizon` windows.
-- In the dashboard, `services/hybrid_service.py` loads the engine once. It walks `replay_flows.csv` in `ts` order, and at each window boundary `t0 + k·window_sec` it calls `SentinelEngine.analyse(flows of the last lookback windows, window_start=<recorded start>)`.
-- Timestamps are never generated. Wall-clock time is used only to pace an accelerated replay.
-- Hosts are the IP addresses recorded in the data, with no device names attached.
-- `scripts/check_hybrid.py` checks that the dashboard reproduces the notebook's `dashboard_feed.csv`.
+**Pipeline.** `services/hybrid_service.py` loads `SentinelEngine` from `sentinel_inference.py` once; the training
+notebook imports the same file. The service then:
 
-**What the current artifacts can and cannot show.** These artifacts come from a development run. The test period's traffic types are listed in `reports/split_coverage.csv`, and `reports/early_warning.csv` evaluates no onset/escalation events. So the app shows detection and forecast scores for the test period but makes no early-warning claim. The views handle runs that contain "Predicted" alerts and other attack types without code changes.
+1. walks `replay_flows.csv` in `ts` order;
+2. at each window boundary `t0 + k·window_sec`, calls `analyse(flows of the last lookback windows,
+   window_start=<recorded start>)`;
+3. de-duplicates the engine's alert levels, so each host raises one alert per level until its level changes.
 
-**Legacy XGBoost baseline: per-flow only.**
-- CICIoT2023 and the ToN_IoT train/test file have no usable timestamps, so Spotter (CICIoT2023, 46 numeric features) and Risk Analyst (ToN_IoT connection features) are per-flow classifiers: no sequence model and no forecasting.
-- Their Live Monitor demo samples rows at random from `data/simulations_feed.csv`. That feed pairs unrelated rows from the two datasets, each row carrying a native feature set for each model, and assigns generated times, source IPs and device names for display.
-- That feed is labelled "Legacy XGBoost demo (non-chronological sample)" and never drives any hybrid timeline or forecast.
+**Partial lookback.** A window is *complete* when all `lookback` windows before it lie inside the replay file's
+recorded range. Earlier windows are shown greyed out, with a note, and never raise alerts.
 
-**Training.** The XGBoost models were trained on GPU (`device='cuda'`) in a companion Kaggle notebook. The RF–LSTM hybrid and its comparison models were trained in a separate Kaggle notebook that exports `artifacts_rf_lstm/`.
+**Alert rules** (`sentinel_inference.alert_level`, thresholds from `preprocessing.json`):
+
+| Level | Raised when |
+|---|---|
+| CRITICAL | DoS/DDoS/ransomware detected now, or ransomware-level activity forecast |
+| HIGH | compromise detected now, or P(escalation ahead) at or above the HIGH threshold |
+| WARNING | reconnaissance detected now, or P(any attack ahead) at or above the WARNING threshold |
+
+**Research-integrity rules.**
+- Event times come only from the data (`ts`, `win_ts`, `window_start_utc`). Wall-clock time only paces the replay
+  and rate-limits notifications.
+- Hosts are the recorded IP addresses; no device names are attached.
+- Every metric shown is read from the report CSVs.
+
+**Previous system.** The earlier XGBoost system (CICIoT2023 "Spotter" and ToN_IoT "Risk Analyst", per-flow only)
+has been retired from the product and moved to `legacy/` (see `legacy/README.md`). XGBoost now appears only on the
+Model Evaluation screen, in two places:
+- the XGBoost baseline rows from the same ToN_IoT experiment;
+- the previous CICIoT2023 system's reference metrics (`model_artifacts/spotter_metrics.json`), labelled as a
+  different dataset and not directly comparable.
 
 ---
 
 ## Project structure
 
 ```
-sentineliot_app/
-  main.py                   entry point
-  app/
-    auth/                   login, session handling, SQLite user DB
-    common/                 theme, shared widgets, app context, paths
-    dashboard/               Dashboard screen (legacy demo)
-    hybrid_replay/           Hybrid Replay screen (RF-LSTM, recorded time)
-    risk_timeline/           Risk Timeline screen (RF-LSTM, dashboard_feed.csv)
-    model_comparison/        Model Comparison screen (report CSVs + figures)
-    live_monitor/            Baseline: XGBoost screen + SimulationEngine (legacy demo)
-    alerts/                  Alerts screen (hybrid + legacy tabs)
-    analytics/               Analytics & Reports screen
-    model_info/              Model Info screen
-    user_management/         User Management screen
-    settings/                Settings screen
-    shell.py                 app shell, navigation, result polling, toasts
-  services/
-    hybrid_service.py        RF-LSTM service: SentinelEngine, replay iterator, alert de-duplication
-    reports.py               reads artifacts_rf_lstm/reports/*.csv and figures
-  models/
-    inference.py             Spotter / RiskAnalyst model wrappers (legacy baseline)
-  model_artifacts/           legacy XGBoost model files
-  artifacts_rf_lstm/         RF-LSTM hybrid artifacts (models, data, reports, figures)
-  data/
-    simulations_feed.csv     legacy non-chronological demo feed
-  scripts/
-    check_hybrid.py          parity check: dashboard hybrid vs dashboard_feed.csv
-    generate_placeholder_artifacts.py   generates dummy artifacts for plumbing tests
-  requirements.txt
+main.py                     entry point (CustomTkinter window, login -> shell)
+app/
+  auth/                     login screen, password reset dialog, SQLite user/alert store (db.py)
+  brand/                    logo drawing code (logo.py) and generated assets (PNG, .ico)
+  screens/                  overview, live_replay, alerts, risk_timeline, evaluation, about, settings, users
+  ui/                       design tokens, theme switching, widget kit, matplotlib theming
+  shell.py                  sidebar navigation, replay queue -> alerts pipeline
+  context.py                state shared by the screens
+  common/paths.py           resource / user-data path resolution (PyInstaller-ready)
+services/
+  hybrid_service.py         SentinelEngine wrapper, replay iterator, alert de-duplication, replay worker
+  reports.py                report CSVs, figures, previous-system metrics
+  report_export.py          Model Evaluation -> self-contained HTML report
+  run_info.py               training-run facts from README.txt / preprocessing.json
+  prefs.py                  theme, default speed, artifacts folder (prefs.json)
+scripts/
+  check_hybrid.py           parity check against dashboard_feed.csv
+  make_brand_assets.py      regenerates app/brand/assets/
+model_artifacts/
+  spotter_metrics.json      previous system's reference metrics (shown as-is)
+legacy/                     pre-Vigil XGBoost system and old UI (not imported by the app)
 ```
 
 ---
 
 ## Packaging as a standalone binary
 
-All paths resolve through `app/common/paths.py`, so the project is PyInstaller-ready:
-
 ```bash
 pip install pyinstaller
-pyinstaller --name SentinelIoT --onedir \
-  --add-data "model_artifacts:model_artifacts" \
-  --add-data "data:data" \
-  main.py
+pyinstaller --name Vigil --onedir --icon app/brand/assets/vigil.ico ^
+  --add-data "artifacts_rf_lstm;artifacts_rf_lstm" --add-data "model_artifacts;model_artifacts" ^
+  --add-data "app/brand/assets;app/brand/assets" --add-data "scripts;scripts" main.py
 ```
 
-(Use `;` instead of `:` in `--add-data` on Windows.)
+(On macOS/Linux use `:` instead of `;` in `--add-data`, and `\` for line continuation.) A frozen build stores
+`users.db` and `prefs.json` in `~/.vigil`.
 
 ---
 
 ## Status
 
-Research prototype built as part of a PhD thesis on ML-based IoT network surveillance. Predictions are only meaningful once real trained artifacts (not the placeholder set) are in place. Not intended for production deployment on live network traffic.
+Research prototype for a PhD thesis. It replays recorded testbed traffic and is not a live network sensor. See
+*About the model → Limitations* in the app for what the current results can and cannot show.

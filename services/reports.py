@@ -70,3 +70,52 @@ def early_warning_events_evaluated() -> Optional[int]:
 
 def figure_paths() -> list[str]:
     return sorted(glob.glob(os.path.join(FIGURES_DIR, "*.png")))
+
+
+# ---------------------------------------------------------------- XGBoost separation
+# Model Evaluation shows XGBoost only in its own section, so rows are split by name.
+def is_xgboost(model: str) -> bool:
+    return "xgboost" in str(model).lower()
+
+
+def split_xgboost(df: Optional[pd.DataFrame]) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """(rows without XGBoost, XGBoost rows) of a report with a 'model' column."""
+    if df is None or "model" not in df:
+        return df, None
+    mask = df["model"].map(is_xgboost)
+    return df[~mask].reset_index(drop=True), df[mask].reset_index(drop=True)
+
+
+# Columns of model_comparison.csv that duplicate efficiency.csv / early_warning.csv; they are shown
+# in those tables instead of being repeated in the detection/forecast tables.
+OPERATIONAL_COLUMNS = ["train_s", "infer_ms_per_1k_seq", "size_mb"]
+EARLY_WARNING_PREFIXES = ("escalation_", "onset_")
+
+
+def quality_columns(df: pd.DataFrame) -> list[str]:
+    return [c for c in df.columns if c not in ("model", "task", *OPERATIONAL_COLUMNS)
+            and not c.startswith(EARLY_WARNING_PREFIXES) and df[c].notna().any()]
+
+
+def previous_system_metrics() -> Optional[dict]:
+    """Reference metrics of the previous CICIoT2023 XGBoost system (model_artifacts/spotter_metrics.json)."""
+    import json
+    from app.common.paths import resource_path
+    path = resource_path("model_artifacts", "spotter_metrics.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return {"source": data.get("source"), "metrics": data.get("metrics") or {}, "path": path}
+
+
+def display_path(path: str) -> str:
+    """Path relative to the project folder when inside it (keeps local user paths out of screenshots)."""
+    from app.common.paths import resource_path
+    root = resource_path()
+    try:
+        rel = os.path.relpath(path, root)
+    except ValueError:      # different drive
+        return path
+    return path if rel.startswith("..") else rel.replace(os.sep, "/")
