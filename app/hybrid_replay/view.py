@@ -109,6 +109,9 @@ class HybridReplayView(tk.Frame):
         self.window_label.grid(row=2, column=0, sticky="w")
         self.level_summary = tk.Frame(cinner, bg=theme.BG_CARD)
         self.level_summary.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.lookback_label = tk.Label(cinner, text="", bg=theme.BG_CARD, fg=theme.ACCENT_AMBER,
+                                       font=(theme.FONT_LABEL[0], 9), justify="left", wraplength=1000)
+        self.lookback_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
         self.window_label.config(text=self._config_text())
 
         # Host table
@@ -238,6 +241,16 @@ class HybridReplayView(tk.Frame):
         self.window_label.config(text=f"window {step.step} of {step.total_steps} · "
                                       f"{step.n_flows_window:,} flows recorded in this window · "
                                       f"{len(step.hosts)} hosts in lookback\n{self._config_text()}")
+
+        if step.lookback_complete:
+            self.lookback_label.config(text="")
+        else:
+            first, _ = self.svc.replay_windows()
+            self.lookback_label.config(text=(
+                f"⚠ Partial lookback: only {step.lookback_available} of {step.lookback} lookback windows lie "
+                f"inside replay_flows.csv, which starts at {_pretty_utc(self.svc.to_utc(self.svc.window_start(first)))}. "
+                "Any traffic recorded before that is not in the file, so this window's result may differ from the "
+                "training pipeline's."))
 
         hosts = step.hosts
         for w in self.level_summary.winfo_children():

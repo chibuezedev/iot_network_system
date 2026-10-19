@@ -114,6 +114,15 @@ class ReplayStep:
     lstm_available: bool
     speed: float = 1.0                      # requested replay multiplier
     actual_speed: Optional[float] = None    # achieved multiplier (None until measured)
+    # How many of the `lookback` windows behind this one lie inside replay_flows.csv.
+    # Fewer than `lookback` means the file starts too late to supply the full history
+    # the model saw in training (e.g. the replay is a slice of a longer test block).
+    lookback_available: int = 0
+    lookback: int = 0
+
+    @property
+    def lookback_complete(self) -> bool:
+        return self.lookback_available >= self.lookback
 
 
 @dataclass
@@ -262,12 +271,20 @@ class HybridService:
 
     # ---- replay ----------------------------------------------------------
     def replay_windows(self) -> tuple[int, int]:
-        """(first, last) window index the replay evaluates.
+        """(first, last) window index covered by replay_flows.csv.
 
-        The first evaluated window is the first one with a full lookback of
-        recorded data behind it (same convention as the training notebook)."""
+        The replay evaluates every one of these windows. Windows near the start
+        may have fewer than `lookback` windows of recorded history inside the
+        file; each ReplayStep reports this (lookback_available), so the UI can
+        say so instead of the replay silently skipping them. A replay shorter
+        than `lookback` windows (e.g. a slice of a test block) still plays."""
         k = self.window_index(self.replay_flows()["ts"].values)
-        return int(k.min()) + self.lookback - 1, int(k.max())
+        return int(k.min()), int(k.max())
+
+    def lookback_available(self, k: int) -> int:
+        """Number of the `lookback` windows ending at k that lie inside replay_flows.csv."""
+        first, _ = self.replay_windows()
+        return int(max(0, min(self.lookback, k - first + 1)))
 
     def iter_replay(self, start_k: Optional[int] = None) -> Iterator[ReplayStep]:
         """Walk replay_flows.csv in ts order; at each window boundary run the engine
@@ -275,6 +292,7 @@ class HybridService:
         flows = self.replay_flows()
         k_all = self.window_index(flows["ts"].values)     # non-decreasing, since flows are ts-sorted
         first, last = self.replay_windows()
+        data_first = first
         if start_k is not None:
             first = max(first, int(start_k))
         total = last - first + 1
@@ -294,7 +312,9 @@ class HybridService:
                 hosts = hosts.sort_values("entity", kind="mergesort").reset_index(drop=True)
             yield ReplayStep(k=k, window_start=ws, window_start_utc=self.to_utc(ws), step=step,
                              total_steps=total, n_flows_window=int(hi - cur), hosts=hosts,
-                             rf_counts=rf_counts, lstm_available=self.lstm_available)
+                             rf_counts=rf_counts, lstm_available=self.lstm_available,
+                             lookback_available=int(min(self.lookback, k - data_first + 1)),
+                             lookback=self.lookback)
 
     def _rf_summary(self, window_flows: pd.DataFrame) -> tuple[dict, dict]:
         """Per-host counts of the RF's per-flow verdicts in the current window,
