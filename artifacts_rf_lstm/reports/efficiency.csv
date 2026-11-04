@@ -1,0 +1,5 @@
+model,train_s,infer_ms_per_1k_seq,size_mb,note
+RF-LSTM hybrid,336.1668589115143,2.8393218731381653,135.16782093048096,includes the flow RF (incl. out-of-fold stage); flow scoring time reported in flow table
+LSTM (standalone),1.718902349472046,2.161896390082065,0.3123435974121094,
+RF (standalone),5.403812885284424,5.9512024191668305,13.346940040588379,forecaster
+XGBoost (baseline),2.212226390838623,4.235351119876251,1.368326187133789,forecaster

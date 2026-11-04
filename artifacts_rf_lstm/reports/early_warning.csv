@@ -1,0 +1,11 @@
+model,event,events_evaluated,anticipated,early_warning_recall,median_lead_minutes
+RF-LSTM hybrid,onset,21,2,0.09523809523809523,3.0
+LSTM (standalone),onset,21,2,0.09523809523809523,5.0
+RF (standalone),onset,21,14,0.6666666666666666,5.0
+XGBoost (baseline),onset,21,13,0.6190476190476191,5.0
+Persistence,onset,21,0,0.0,
+RF-LSTM hybrid,escalation,21,2,0.09523809523809523,3.0
+LSTM (standalone),escalation,21,2,0.09523809523809523,5.0
+RF (standalone),escalation,21,12,0.5714285714285714,5.0
+XGBoost (baseline),escalation,21,12,0.5714285714285714,5.0
+Persistence,escalation,21,0,0.0,

@@ -50,3 +50,5 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+# Too large for GitHub (>100 MB); transfer separately
+/artifacts_rf_lstm/models/rf_flow.joblib
