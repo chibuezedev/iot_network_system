@@ -11,7 +11,7 @@ Vigil is the desktop dashboard for a PhD research project on ML-based IoT networ
   - **forecasts** the highest severity tier within the next horizon.
 
 Traffic is replayed in recorded capture-time order, and every time Vigil shows is the recorded time. The models
-were trained in a separate Kaggle notebook; see [Model artifacts](#model-artifacts).
+were trained in a separate [Kaggle notebook](https://www.kaggle.com/code/chibuezedev/sentineliot-rf-lstm); see [Model artifacts](#model-artifacts).
 
 ---
 
@@ -59,7 +59,7 @@ torch, Vigil still runs and shows the RF per-flow layer, with a notice that the 
 
 ### Model artifacts
 
-**Where they come from.** The RF–LSTM training notebook on Kaggle writes its outputs to a folder named
+**Where they come from.** The [RF–LSTM training notebook on Kaggle](https://www.kaggle.com/code/chibuezedev/sentineliot-rf-lstm) writes its outputs to a folder named
 `artifacts_rf_lstm/`. Download it as the notebook's output zip from the *Output* tab.
 
 **Where to put them.** Unzip at the project root, so the folder sits next to `main.py` and contains `models/`,
